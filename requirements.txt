@@ -1,5 +1,8 @@
 # Book Reader - Core Dependencies
 
+# Build system (required first)
+setuptools>=45.0
+
 # Audio processing and playback
 soundfile>=0.12.1
 sounddevice>=0.4.5

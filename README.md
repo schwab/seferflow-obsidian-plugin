@@ -30,12 +30,7 @@ A Python terminal application that converts PDF books into natural-sounding audi
 
 ## Installation
 
-### Requirements
-- Python 3.8+
-- `pdftotext` (from Poppler utilities)
-- Audio playback: `aplay`, `paplay`, or `ffplay`
-
-### Quick Start
+### Quick Start (Recommended)
 
 ```bash
 # Clone repository
@@ -46,30 +41,35 @@ cd book-reader
 python3 -m venv venv
 source venv/bin/activate
 
+# IMPORTANT: Upgrade pip and setuptools FIRST
+pip install --upgrade pip setuptools wheel
+
 # Install dependencies
-pip install soundfile sounddevice edge-tts numpy
-
-# (Optional) Install local TTS
-pip install kokoro-onnx
-
-# On Linux, install system dependencies
-sudo apt-get install poppler-utils  # for pdftotext
+pip install -r requirements.txt
 
 # Verify setup
 ./verify_book_reader.sh
 
-# Run
+# Run!
 ./book_reader
 ```
 
-### For macOS
+### Detailed Installation
 
-```bash
-# Install system dependencies
-brew install poppler
+For complete step-by-step instructions including system dependencies, troubleshooting, and optional features, see **[INSTALL.md](INSTALL.md)**.
 
-# Then follow Quick Start above
-```
+This includes:
+- Linux/macOS/Windows setup
+- System dependency installation
+- Troubleshooting common errors
+- Optional offline TTS setup
+- Development environment setup
+
+### Requirements
+
+- Python 3.8 or higher
+- `pdftotext` from Poppler (installed via system package manager)
+- Audio playback device (sounddevice or aplay)
 
 ## Usage
 

@@ -1,14 +1,31 @@
 #!/usr/bin/env python3
 """
 Setup script for Book Reader package.
+
+NOTE: For most users, just run:
+  pip install -r requirements.txt
+  ./book_reader
+
+This setup.py is optional and for advanced package installation.
 """
 
-from setuptools import setup, find_packages
+try:
+    from setuptools import setup
+except ImportError:
+    print("ERROR: setuptools not found!")
+    print("Install it first: pip install --upgrade pip setuptools wheel")
+    exit(1)
+
 from pathlib import Path
 
 # Read README for long description
 readme_file = Path(__file__).parent / "README.md"
-long_description = readme_file.read_text(encoding="utf-8") if readme_file.exists() else ""
+long_description = ""
+if readme_file.exists():
+    try:
+        long_description = readme_file.read_text(encoding="utf-8")
+    except Exception:
+        pass
 
 setup(
     name="book-reader",
@@ -24,7 +41,6 @@ setup(
         "Source Code": "https://github.com/YOUR_USERNAME/book-reader",
     },
     license="MIT",
-    packages=find_packages(),
     python_requires=">=3.8",
     install_requires=[
         "soundfile>=0.12.1",
@@ -46,7 +62,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "book-reader=book_reader:main",
+            "book-reader=book_reader_simple:main",
         ],
     },
     classifiers=[
@@ -61,6 +77,7 @@ setup(
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
         "Topic :: Multimedia :: Sound/Audio :: Speech",
         "Topic :: Office/Business",
         "Topic :: Utilities",
