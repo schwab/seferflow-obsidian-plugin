@@ -636,7 +636,9 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
     print(f"   Controls: [Space] Pause  [←/→] ±5s  [n/p] Chapter  [q] Quit\n")
     time.sleep(1)
 
-    audio_queue = queue.Queue(maxsize=3)  # Buffer 3 chunks
+    # Use larger queue to handle slow edge-tts chunk delivery (4-6 seconds per chunk)
+    # Keep 8 chunks buffered so gaps in TTS don't starve the audio callback
+    audio_queue = queue.Queue(maxsize=10)
     stop_event = threading.Event()
     error_happened = [False]
     chapter_result = 'done'  # Default result
@@ -644,16 +646,17 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
     def producer():
         """Generate TTS for each chunk in background.
 
-        Uses hysteresis: waits until queue drains to ≤1 items before generating
-        the next chunk. This gives the system "downtime" between generations and
-        prevents aggressive queue filling.
+        Aggressive buffering: keeps 6-8 chunks in queue to handle slow edge-tts
+        delivery from the network. Edge-TTS takes 4-6 seconds per chunk, so we
+        pre-buffer heavily to prevent queue starvation.
         """
         for i, chunk in enumerate(chunks):
             if stop_event.is_set():
                 break
 
-            # Hysteresis: wait for queue to drain before generating next chunk
-            while audio_queue.qsize() >= 2 and not stop_event.is_set():
+            # Wait until queue drains before generating next chunk.
+            # Keep 6+ chunks buffered to handle slow network delivery from edge-tts.
+            while audio_queue.qsize() >= 7 and not stop_event.is_set():
                 time.sleep(0.2)
 
             if stop_event.is_set():
@@ -686,6 +689,12 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
     keyboard_stop = threading.Event()
     keyboard_thread = threading.Thread(target=_keyboard_reader, args=(controls, keyboard_stop), daemon=True)
     keyboard_thread.start()
+
+    # Pre-buffer chunks before starting playback to avoid starvation from slow edge-tts
+    print("🔄 Pre-buffering audio chunks...")
+    while audio_queue.qsize() < 3 and not stop_event.is_set() and not error_happened[0]:
+        time.sleep(0.1)
+    print(f"✓ {audio_queue.qsize()} chunks buffered, starting playback\n")
 
     # Main thread plays chunks as they become available
     # Buffer 2 chunks together to avoid choppiness at transitions
