@@ -1,4 +1,4 @@
-# Book Reader - Core Dependencies
+# SeferFlow - Core Dependencies
 
 # Build system (required first)
 setuptools>=45.0

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Simple, Robust Book Reader with File Browser
-Streaming TTS generation with live buffer visualization - no terminal crashes.
+SeferFlow - Terminal-based PDF Audiobook Player
+Streaming TTS generation with live buffer visualization, persistent settings - no terminal crashes.
 """
 
 import os
@@ -56,6 +56,47 @@ class PlaybackState:
     def __post_init__(self):
         if self.chunk_durations is None:
             self.chunk_durations = []
+
+
+# Settings persistence
+CONFIG_PATH = Path.home() / ".config" / "seferflow" / "settings.json"
+
+
+def load_settings() -> Dict[str, any]:
+    """Load saved settings from disk or return defaults."""
+    defaults = {"voice": "en-US-AriaNeural", "speed": 1.0}
+
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH, "r") as f:
+                saved = json.load(f)
+
+            # Validate values are in legal range
+            if saved.get("speed") in [0.8, 0.9, 1.0, 1.1, 1.2, 1.3]:
+                defaults["speed"] = saved["speed"]
+
+            valid_voices = {
+                "en-US-AriaNeural",
+                "en-US-GuyNeural",
+                "en-GB-LibbyNeural",
+                "en-GB-RyanNeural",
+            }
+            if saved.get("voice") in valid_voices:
+                defaults["voice"] = saved["voice"]
+        except Exception:
+            pass  # Silently ignore corrupt config file
+
+    return defaults
+
+
+def save_settings(speed: float, voice: str) -> None:
+    """Persist current settings to disk."""
+    try:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(CONFIG_PATH, "w") as f:
+            json.dump({"voice": voice, "speed": speed}, f, indent=2)
+    except Exception:
+        pass  # Non-fatal: just don't save
 
 
 def clear_screen():
@@ -623,11 +664,16 @@ def main():
             print("❌ No text to process")
             return 1
 
-        # Step 6: Settings menu (voice and speed)
-        speed, voice = settings_menu()
+        # Step 6: Settings menu (voice and speed) - load saved defaults
+        saved_settings = load_settings()
+        speed, voice = settings_menu(default_speed=saved_settings["speed"],
+                                     default_voice=saved_settings["voice"])
         if speed is None:
             print("Cancelled.")
             return 0
+
+        # Save settings for next time
+        save_settings(speed, voice)
 
         # Step 7: Stream and play with visualization
         try:

@@ -1,8 +1,8 @@
-# Book Reader - Terminal-Based PDF Audiobook Player
+# SeferFlow - Terminal-Based PDF Audiobook Player
 
 A Python terminal application that converts PDF books into natural-sounding audiobooks using neural text-to-speech (TTS). Stream chapters with real-time buffer visualization, multiple voice options, and adjustable playback speed.
 
-**Status**: ✅ Production Ready (v1.3)
+**Status**: ✅ Production Ready (v1.4)
 
 ## Features
 
@@ -14,10 +14,11 @@ A Python terminal application that converts PDF books into natural-sounding audi
 - **Directory Navigation** - Browse book collections intuitively
 - **Batch Mode** - Command-line automation with full feature set
 
-### 🎨 User Interface (v1.3)
+### 🎨 User Interface (v1.4)
 - **Live Visualization** - Real-time buffer fill, progress bar, and time tracking
 - **Color-Coded Progress** - Green (played), Yellow (buffered), Gray (pending)
 - **Direct Settings Selection** - Change voice/speed with single keypresses
+- **Persistent Settings** - Your voice and speed preferences saved automatically
 - **Clean Text Menus** - Simple, intuitive navigation
 - **No Terminal Crashes** - Stable ANSI display, no raw tty mode hacks
 
@@ -34,8 +35,8 @@ A Python terminal application that converts PDF books into natural-sounding audi
 
 ```bash
 # Clone repository
-git clone https://github.com/YOUR_USERNAME/book-reader.git
-cd book-reader
+git clone https://github.com/YOUR_USERNAME/seferflow.git
+cd seferflow
 
 # Create virtual environment
 python3 -m venv venv
@@ -133,24 +134,24 @@ For automation and scripting:
 
 ```bash
 # Read a specific chapter
-./book_reader --batch /path/to/book.pdf --chapter 3
+./seferflow --batch /path/to/book.pdf --chapter 3
 
 # With custom voice and speed
-./book_reader --batch /path/to/book.pdf \
+./seferflow --batch /path/to/book.pdf \
   --chapter "Introduction" \
   --voice en-US-GuyNeural \
   --speed 1.2
 
 # Save to audio file
-./book_reader --batch /path/to/book.pdf \
+./seferflow --batch /path/to/book.pdf \
   --chapter 3 \
   --save output.wav
 
 # List available voices
-./book_reader --batch --list-voices
+./seferflow --batch --list-voices
 
 # Advanced: Specific page range
-./book_reader --batch /path/to/book.pdf \
+./seferflow --batch /path/to/book.pdf \
   --pages 10-50 \
   --speed 0.9
 ```
@@ -160,10 +161,10 @@ For automation and scripting:
 ### Directory Structure
 
 ```
-book-reader/
-├── book_reader              # Main wrapper script
-├── book_reader_simple.py    # Interactive mode (21KB)
-├── book_reader.py           # Batch mode (20KB)
+seferflow/
+├── seferflow              # Main wrapper script
+├── seferflow.py    # Interactive mode (21KB)
+├── seferflow_batch.py           # Batch mode (20KB)
 ├── verify_book_reader.sh    # Setup verification
 ├── README.md                # This file
 ├── CHANGELOG.md             # Version history
@@ -272,8 +273,8 @@ See `docs/TROUBLESHOOTING.md` for more help.
 ### Setup Development Environment
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/book-reader.git
-cd book-reader
+git clone https://github.com/YOUR_USERNAME/seferflow.git
+cd seferflow
 python3 -m venv venv
 source venv/bin/activate
 pip install -e .
@@ -367,7 +368,7 @@ Built with ❤️ for book lovers who want to listen while they work.
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 
 ### Issues
-Report bugs on [GitHub Issues](https://github.com/YOUR_USERNAME/book-reader/issues)
+Report bugs on [GitHub Issues](https://github.com/YOUR_USERNAME/seferflow/issues)
 
 ### Contact
 - Open an issue on GitHub

@@ -1,13 +1,13 @@
 # GitHub Setup Instructions
 
-Your Book Reader project is ready to be pushed to GitHub!
+Your SeferFlow project is ready to be pushed to GitHub!
 
 ## Quick Setup
 
 ### 1. Create a GitHub Repository
 
 1. Go to https://github.com/new
-2. Repository name: `book-reader`
+2. Repository name: `seferflow`
 3. Description: `Terminal-based PDF audiobook player with neural TTS`
 4. Choose visibility (public or private)
 5. **DO NOT** initialize with README, .gitignore, or license (we have them)
@@ -16,10 +16,10 @@ Your Book Reader project is ready to be pushed to GitHub!
 ### 2. Add Remote and Push
 
 ```bash
-cd ~/projects/book-reader
+cd ~/projects/seferflow
 
 # Add GitHub remote (replace YOUR_USERNAME)
-git remote add origin https://github.com/YOUR_USERNAME/book-reader.git
+git remote add origin https://github.com/YOUR_USERNAME/seferflow.git
 
 # Verify remote
 git remote -v
@@ -42,7 +42,7 @@ Check your repository online to confirm all files are there:
 ## Project Structure
 
 ```
-book-reader/
+seferflow/
 ├── book_reader              # Main executable wrapper
 ├── book_reader_simple.py    # Interactive mode (21KB)
 ├── book_reader.py           # Batch/CLI mode (20KB)
@@ -137,8 +137,8 @@ Once on GitHub, users will be able to install with:
 
 ```bash
 # Clone
-git clone https://github.com/YOUR_USERNAME/book-reader.git
-cd book-reader
+git clone https://github.com/YOUR_USERNAME/seferflow.git
+cd seferflow
 
 # Setup
 python3 -m venv venv
@@ -203,9 +203,9 @@ git push origin main
 Add to your README.md to show project status:
 
 ```markdown
-# Book Reader
+# SeferFlow
 
-[![Tests](https://github.com/YOUR_USERNAME/book-reader/workflows/Tests/badge.svg)](https://github.com/YOUR_USERNAME/book-reader/actions)
+[![Tests](https://github.com/YOUR_USERNAME/seferflow/workflows/Tests/badge.svg)](https://github.com/YOUR_USERNAME/seferflow/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 ```
@@ -215,7 +215,7 @@ Add to your README.md to show project status:
 ### Authentication Issues
 ```bash
 # If you get authentication errors, use SSH:
-git remote set-url origin git@github.com:YOUR_USERNAME/book-reader.git
+git remote set-url origin git@github.com:YOUR_USERNAME/seferflow.git
 
 # Or configure HTTPS
 git config --global credential.helper store

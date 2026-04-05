@@ -1,6 +1,6 @@
 # Installation Guide
 
-Complete step-by-step installation instructions for Book Reader.
+Complete step-by-step installation instructions for SeferFlow.
 
 ## Quick Install (Recommended)
 
@@ -8,8 +8,8 @@ Complete step-by-step installation instructions for Book Reader.
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/YOUR_USERNAME/book-reader.git
-cd book-reader
+git clone https://github.com/YOUR_USERNAME/seferflow.git
+cd seferflow
 
 # 2. Create virtual environment
 python3 -m venv venv
@@ -22,7 +22,7 @@ pip install --upgrade pip setuptools
 pip install -r requirements.txt
 
 # 5. Verify installation
-bash verify_book_reader.sh
+bash verify.sh
 
 # 6. Run!
 ./book_reader
@@ -33,8 +33,8 @@ bash verify_book_reader.sh
 ### Step 1: Clone Repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/book-reader.git
-cd book-reader
+git clone https://github.com/YOUR_USERNAME/seferflow.git
+cd seferflow
 ```
 
 ### Step 2: Create Virtual Environment
@@ -92,7 +92,7 @@ pip install --no-cache-dir -r requirements.txt
 ### Step 6: Verify Installation
 
 ```bash
-bash verify_book_reader.sh
+bash verify.sh
 ```
 
 This should show:
@@ -181,7 +181,7 @@ sudo apt-get install python3.11
 **Solution**: Make executable:
 
 ```bash
-chmod +x book_reader book_reader_simple.py
+chmod +x seferflow seferflow.py
 ```
 
 ## Optional: Install Development Tools
@@ -215,7 +215,7 @@ pip install -e .
 Then you can run from anywhere:
 
 ```bash
-book-reader
+seferflow
 ```
 
 **Note**: You may need to install the package properly. For now, the direct `./book_reader` method is recommended.
@@ -239,7 +239,7 @@ book-reader
 ### Full Test
 
 ```bash
-bash verify_book_reader.sh
+bash verify.sh
 ```
 
 ### Individual Module Tests
@@ -268,7 +268,7 @@ export SOUNDDEVICE_DEVICE=2  # Device index
 To update to the latest version:
 
 ```bash
-cd book-reader
+cd seferflow
 git pull origin main
 pip install --upgrade -r requirements.txt
 ```
@@ -282,8 +282,8 @@ To remove completely:
 deactivate
 
 # Remove directory
-rm -rf ~/projects/book-reader
-rm -rf ~/.virtualenvs/book-reader-lwwo  # or wherever your venv is
+rm -rf ~/projects/seferflow
+rm -rf ~/.virtualenvs/seferflow-lwwo  # or wherever your venv is
 ```
 
 ## Getting Help

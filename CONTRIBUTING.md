@@ -1,4 +1,4 @@
-# Contributing to Book Reader
+# Contributing to SeferFlow
 
 Thank you for your interest in contributing! This document provides guidelines and instructions for contributing.
 
@@ -235,7 +235,7 @@ Contributors are acknowledged in:
 - GitHub contributors page
 - Project README (major contributions)
 
-Thank you for making Book Reader better! 🎉
+Thank you for making SeferFlow better! 🎉
 
 ---
 

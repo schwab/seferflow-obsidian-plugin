@@ -1,5 +1,5 @@
 #!/bin/bash
-# Book Reader - Simple, Stable Terminal UI
+# SeferFlow - Simple, Stable Terminal UI
 # Routes between interactive file browser and batch modes
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,8 +15,8 @@ fi
 # Check for --batch flag
 if [[ "$*" == *"--batch"* ]]; then
     # Batch mode - use non-interactive CLI
-    exec "$PYTHON_CMD" "$SCRIPT_DIR/book_reader.py" "$@"
+    exec "$PYTHON_CMD" "$SCRIPT_DIR/seferflow_batch.py" "$@"
 else
     # Interactive mode - use stable file browser
-    exec "$PYTHON_CMD" "$SCRIPT_DIR/book_reader_simple.py"
+    exec "$PYTHON_CMD" "$SCRIPT_DIR/seferflow.py"
 fi

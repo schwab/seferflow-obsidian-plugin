@@ -1,9 +1,39 @@
 # Changelog
 
-All notable changes to the Book Reader project are documented in this file.
+All notable changes to the SeferFlow project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.4.0] - 2025-04-05
+
+### Added
+- **Settings Persistence** - Voice and speed preferences saved automatically
+  - Settings stored in `~/.config/seferflow/settings.json`
+  - Automatically loaded on startup as defaults
+  - Saved when user confirms settings before playback
+  - Seamless experience with no extra UI elements
+- **Project Rename to SeferFlow** - "Sefer" (ספר) means "book" in Hebrew
+  - New executable: `seferflow`
+  - Interactive mode: `seferflow.py`
+  - Batch mode: `seferflow_batch.py`
+  - Verification script: `verify.sh`
+  - All documentation updated
+
+### Changed
+- `settings_menu()` now accepts `default_speed` and `default_voice` parameters
+- Added `load_settings()` function to read persisted config
+- Added `save_settings()` function to write config to disk
+- Config directory created automatically if missing
+- Graceful handling of missing or corrupt config files
+
+### Technical Details
+- Settings stored as JSON for human readability
+- Validation of loaded values ensures consistency
+- Non-fatal errors (missing/corrupt files) silently use defaults
+- No impact on batch mode (which uses CLI args)
+
+---
 
 ## [1.3.0] - 2025-04-05
 

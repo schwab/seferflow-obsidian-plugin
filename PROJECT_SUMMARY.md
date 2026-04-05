@@ -1,12 +1,12 @@
-# Book Reader - Project Summary
+# SeferFlow - Project Summary
 
 ## 📦 Production-Ready Release
 
-Your Book Reader project has been successfully set up as a production-ready open-source project!
+Your SeferFlow project has been successfully set up as a production-ready open-source project!
 
 ### Location
 ```
-~/projects/book-reader/
+~/projects/seferflow/
 ```
 
 ### Repository Status
@@ -84,7 +84,7 @@ PROJECT_SUMMARY.md         (this file) - Overview
 
 ### Local Testing
 ```bash
-cd ~/projects/book-reader
+cd ~/projects/seferflow
 
 # Test the app locally
 ./book_reader
@@ -96,13 +96,13 @@ bash verify_book_reader.sh
 ### Push to GitHub
 
 1. **Create repository** at https://github.com/new
-   - Name: `book-reader`
+   - Name: `seferflow`
    - Don't initialize with files
 
 2. **Push your code**
    ```bash
-   cd ~/projects/book-reader
-   git remote add origin https://github.com/YOUR_USERNAME/book-reader.git
+   cd ~/projects/seferflow
+   git remote add origin https://github.com/YOUR_USERNAME/seferflow.git
    git push -u origin main
    ```
 
@@ -113,7 +113,7 @@ See `GITHUB_SETUP.md` for detailed instructions.
 ## 📁 Directory Layout
 
 ```
-book-reader/
+seferflow/
 ├── book_reader                    # Executable wrapper
 ├── book_reader_simple.py          # Interactive mode
 ├── book_reader.py                 # Batch mode
@@ -296,7 +296,7 @@ See `CONTRIBUTING.md` for:
 
 ## 🎉 Ready to Ship!
 
-Your Book Reader project is **production-ready** and **GitHub-ready**.
+Your SeferFlow project is **production-ready** and **GitHub-ready**.
 
 ### Quick Checklist
 - [x] Source code complete and tested
@@ -313,9 +313,9 @@ Push to GitHub and share with the world! 🚀
 
 ---
 
-**Project**: Book Reader  
+**Project**: SeferFlow  
 **Version**: 1.3.0  
 **Status**: ✅ Production Ready  
-**Location**: ~/projects/book-reader/  
+**Location**: ~/projects/seferflow/  
 **License**: MIT  
 **Ready for GitHub**: YES ✨

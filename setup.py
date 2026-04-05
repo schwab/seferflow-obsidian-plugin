@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Setup script for Book Reader package.
+Setup script for SeferFlow package.
 
 NOTE: For most users, just run:
   pip install -r requirements.txt
-  ./book_reader
+  ./seferflow
 
 This setup.py is optional and for advanced package installation.
 """
@@ -28,12 +28,12 @@ if readme_file.exists():
         pass
 
 setup(
-    name="book-reader",
+    name="seferflow",
     version="1.3.0",
     description="Terminal-based PDF audiobook player with neural TTS",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    author="Book Reader Contributors",
+    author="SeferFlow Contributors",
     url="https://github.com/YOUR_USERNAME/book-reader",
     project_urls={
         "Bug Tracker": "https://github.com/YOUR_USERNAME/book-reader/issues",
@@ -62,7 +62,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "book-reader=book_reader_simple:main",
+            "book-reader=seferflow_simple:main",
         ],
     },
     classifiers=[
