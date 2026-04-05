@@ -11,6 +11,10 @@ numpy>=1.21.0
 # Text-to-Speech
 edge-tts>=6.1.0
 
+# Terminal UI and keyboard controls
+rich>=13.0
+readchar>=4.0
+
 # Optional: Local offline TTS (install separately if needed)
 # kokoro-onnx>=0.1.0
 

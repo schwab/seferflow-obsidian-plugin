@@ -16,8 +16,17 @@ import queue
 import shutil
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import numpy as np
+
+try:
+    from rich.console import Console
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.text import Text
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
 
 try:
     import soundfile as sf
@@ -52,14 +61,37 @@ class PlaybackState:
     play_start_time: float = 0.0
     play_chunk_duration: float = 0.0
     play_chunk_index: int = 0
+    paused: bool = False  # Whether playback is paused
+    elapsed_before_pause: float = 0.0  # Accumulated time before last pause
 
     def __post_init__(self):
         if self.chunk_durations is None:
             self.chunk_durations = []
 
 
+@dataclass
+class PlayerControls:
+    """Controls for playback (pause/resume, seek, chapter navigation)."""
+    paused: threading.Event = field(default_factory=threading.Event)
+    cmd_queue: queue.SimpleQueue = field(default_factory=queue.SimpleQueue)
+    # Commands: 'seek_forward', 'seek_backward', 'next_chapter', 'prev_chapter', 'quit'
+
+
+class ChapterChangeRequest(Exception):
+    """Raised when user requests to skip to another chapter."""
+    def __init__(self, direction: str):
+        self.direction = direction  # 'next_chapter', 'prev_chapter', 'quit'
+        super().__init__(f"Chapter change requested: {direction}")
+
+
 # Settings persistence
 CONFIG_PATH = Path.home() / ".config" / "seferflow" / "settings.json"
+
+# Rich console for styled display
+if RICH_AVAILABLE:
+    _console = Console()
+else:
+    _console = None
 
 
 def load_settings() -> Dict[str, any]:
@@ -387,28 +419,30 @@ def make_buffer_bar(current: int, max_size: int, width: int = 15) -> str:
     return f"[{bar}]  {filled}/{max_size}"
 
 
-def render_display(state: PlaybackState, chapter_name: str, voice_short: str, speed: float,
-                   first_render: bool = False) -> None:
-    """Render live buffer/progress display. Updates in-place using ANSI cursor movement."""
-    DISPLAY_LINES = 8
+def _build_display(state: PlaybackState, chapter_name: str, voice_short: str, speed: float) -> Panel:
+    """Build a Rich Panel renderable for the player display."""
+    if not RICH_AVAILABLE:
+        # Fallback: just return empty text if Rich not available
+        return Text("Playback in progress...")
 
-    if not first_render:
-        # Move cursor up to overwrite previous display
-        sys.stdout.write(f'\x1b[{DISPLAY_LINES}A\r')
-        sys.stdout.flush()
+    # Status indicator
+    if state.paused:
+        status_text = Text("⏸ PAUSED", style="bold yellow")
+    elif state.generating or state.chunks_played < state.total_chunks:
+        status_text = Text("▶ PLAYING", style="bold green")
+    else:
+        status_text = Text("✓ DONE", style="bold green")
 
-    cols = min(shutil.get_terminal_size().columns - 2, 70)
+    # Chapter and settings line
+    chapter_short = chapter_name[:40]
+    header_line = f"{chapter_short:<40} {speed:>4.1f}x  {voice_short}"
 
-    # Line 1: Separator
-    print("─" * cols)
+    # Time information
+    if state.paused:
+        elapsed = state.elapsed_before_pause
+    else:
+        elapsed = state.elapsed_before_pause + (time.time() - state.play_start_time) if state.play_start_time > 0 else state.elapsed_before_pause
 
-    # Line 2: Status header
-    status = f"{GREEN}▶{RESET} PLAYING" if state.generating or state.chunks_played < state.total_chunks else f"{GREEN}✓{RESET} DONE"
-    chapter_short = chapter_name[:35].ljust(35)
-    print(f"{status}   {chapter_short}  {speed}x  {voice_short}")
-
-    # Line 3: Section + time info
-    elapsed = time.time() - state.play_start_time if state.play_start_time > 0 else 0
     total_estimated = sum(state.chunk_durations) if state.chunk_durations else 0
     if state.chunks_played < len(state.chunk_durations):
         remaining = sum(state.chunk_durations[state.chunks_played:])
@@ -418,82 +452,174 @@ def render_display(state: PlaybackState, chapter_name: str, voice_short: str, sp
 
     time_str = f"{fmt_time(elapsed)} / ~{fmt_time(total_est)}"
     section_str = f"Section {state.chunks_played + 1} of {state.total_chunks}"
-    print(f"  {section_str}   {time_str}")
+    time_line = f"{section_str:<20} {time_str:>15}"
 
-    # Line 4: Progress bar (overall chunks)
+    # Progress bar
     buffered = state.chunks_generated - state.chunks_played
-    progress_bar = make_progress_bar(state.total_chunks, state.chunks_played, buffered)
-    print(f"  Progress:  {progress_bar}")
+    progress_bar_str = make_progress_bar(state.total_chunks, state.chunks_played, buffered)
 
-    # Line 5: Buffer meter
-    buffer_bar = make_buffer_bar(state.chunks_generated - state.chunks_played, state.queue_max)
+    # Buffer meter
+    buffer_bar_str = make_buffer_bar(state.chunks_generated - state.chunks_played, state.queue_max)
     gen_status = "↺ generating..." if state.generating else "✓ all generated"
-    print(f"  Buffer:    {buffer_bar}   {CYAN}{gen_status}{RESET}")
+    buffer_line = f"Buffer:    {buffer_bar_str}  {gen_status}"
 
-    # Line 6: Blank
-    print()
+    # Instructions
+    instructions = "[Space] Pause  [←/→] ±5s  [n/p] Chapter  [q] Quit"
 
-    # Line 7: Instructions
-    print(f"  {DARK_GRAY}Ctrl+C to stop{RESET}")
+    # Build content
+    content = Text()
+    content.append(header_line + "\n\n", style="dim")
+    content.append(time_line + "\n", style="dim")
+    content.append(f"Progress:  {progress_bar_str}\n", style="dim")
+    content.append(buffer_line + "\n\n", style="dim")
+    content.append(instructions, style="dim")
 
-    # Line 8: Separator
-    print("─" * cols)
-
-    sys.stdout.flush()
+    return Panel(content, title=status_text, expand=False)
 
 
 def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: PlaybackState,
-                            render_fn, chapter_name: str, voice_short: str, speed: float):
-    """Play audio while displaying live buffer/progress updates.
+                            chapter_name: str, voice_short: str, speed: float,
+                            controls: PlayerControls):
+    """Play audio while displaying live buffer/progress updates with playback controls.
 
-    Display updates run in a separate daemon thread to avoid blocking the audio playback.
-    This eliminates GIL contention that was causing 0.5-1s pauses every 4-5 seconds.
+    Implements pause/resume, seek ±5s, and chapter navigation. Uses Rich Live display
+    and polling loop for real-time responsiveness to user input.
     """
     samples = normalize_audio(samples)
-    state.play_start_time = time.time()
-    state.play_chunk_duration = len(samples) / sample_rate
+    sample_offset = 0
+    SEEK_FORWARD_SAMPLES = int(5 * sample_rate)  # 5-second seek
+    SEEK_BACKWARD_SAMPLES = int(5 * sample_rate)
+
+    def _current_offset() -> int:
+        """Calculate current playback position in samples."""
+        elapsed = (time.time() - state.play_start_time) if not state.paused else 0
+        return sample_offset + int(elapsed * sample_rate)
+
+    def _restart_from(offset: int):
+        """Stop playback and restart from a new sample offset."""
+        nonlocal sample_offset
+        sample_offset = max(0, min(len(samples) - 1, offset))
+        sd.stop()
+        state.play_start_time = time.time()
+        state.paused = False
+        if sample_offset < len(samples):
+            remaining = samples[sample_offset:]
+            if len(remaining) > 0:
+                sd.play(remaining, sample_rate, latency='low')
 
     try:
-        if sd:
-            # Launch display thread independently of audio playback
-            display_stop = threading.Event()
-
-            def _display_loop():
-                """Update display every 400ms while audio plays."""
-                render_fn(first_render=True)
-                while not display_stop.wait(0.4):
-                    render_fn(first_render=False)
-
-            display_thread = threading.Thread(target=_display_loop, daemon=True)
-            display_thread.start()
-
-            try:
-                # Audio plays cleanly with zero terminal I/O in this path
-                # Use default blocksize (0) for adaptive latency, and specify
-                # a reasonable latency to avoid buffer underruns
-                sd.play(samples, sample_rate, latency='low')
-                sd.wait()  # Pure blocking, no GIL contention
-            finally:
-                display_stop.set()
-                display_thread.join(timeout=1.0)
-        else:
-            # Fallback to aplay (no display updates)
+        if not sd:
+            # Fallback to aplay (no playback controls)
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
                 temp_wav = f.name
             sf.write(temp_wav, samples, sample_rate)
             subprocess.run(['aplay', temp_wav], check=True)
             os.unlink(temp_wav)
+            return
 
+        # Rich display with live updates
+        if RICH_AVAILABLE:
+            with Live(_build_display(state, chapter_name, voice_short, speed),
+                     console=_console, refresh_per_second=4) as live:
+
+                # Start playback
+                sd.play(samples, sample_rate, latency='low')
+                state.play_start_time = time.time()
+
+                # Main polling loop
+                while True:
+                    # Check for commands from keyboard thread
+                    try:
+                        cmd = controls.cmd_queue.get_nowait()
+                        if cmd == 'seek_forward':
+                            _restart_from(_current_offset() + SEEK_FORWARD_SAMPLES)
+                        elif cmd == 'seek_backward':
+                            _restart_from(_current_offset() - SEEK_BACKWARD_SAMPLES)
+                        elif cmd in ('next_chapter', 'prev_chapter', 'quit'):
+                            sd.stop()
+                            raise ChapterChangeRequest(cmd)
+                    except queue.Empty:
+                        pass
+
+                    # Handle pause/resume
+                    if controls.paused.is_set() and not state.paused:
+                        # Transition to paused
+                        state.elapsed_before_pause += time.time() - state.play_start_time
+                        state.paused = True
+                        sd.stop()
+                    elif not controls.paused.is_set() and state.paused:
+                        # Transition to unpaused
+                        state.paused = False
+                        state.play_start_time = time.time()
+                        offset = _current_offset()
+                        if offset < len(samples):
+                            remaining = samples[offset:]
+                            if len(remaining) > 0:
+                                sd.play(remaining, sample_rate, latency='low')
+                        else:
+                            break  # Past end of audio
+
+                    # Check if playback finished naturally
+                    if not state.paused and not sd.get_stream().active:
+                        break
+
+                    # Update display
+                    live.update(_build_display(state, chapter_name, voice_short, speed))
+
+                    time.sleep(0.05)  # 50ms poll interval
+        else:
+            # Fallback without Rich (just plain playback)
+            sd.play(samples, sample_rate, latency='low')
+            sd.wait()
+
+    except ChapterChangeRequest:
+        raise  # Re-raise to be caught by stream_and_play()
     except KeyboardInterrupt:
-        if sd:
-            try:
-                sd.stop()
-            except:
-                pass
-        raise
+        try:
+            sd.stop()
+        except:
+            pass
+        raise ChapterChangeRequest('quit')
 
 
-def stream_and_play(text: str, voice: str, speed: float, chapter_name: str):
+def _keyboard_reader(controls: PlayerControls, stop_event: threading.Event):
+    """Background thread that reads keyboard input and posts commands.
+
+    Runs in a separate daemon thread, blocking on readchar.readkey() while waiting
+    for user input. Posts commands to controls.cmd_queue or toggles controls.paused.
+    """
+    try:
+        import readchar
+    except ImportError:
+        print("⚠ Warning: readchar not available, keyboard controls disabled")
+        return
+
+    while not stop_event.is_set():
+        try:
+            key = readchar.readkey()
+        except Exception:
+            break
+
+        if key == ' ':
+            # Toggle pause
+            if controls.paused.is_set():
+                controls.paused.clear()
+            else:
+                controls.paused.set()
+        elif key == readchar.key.RIGHT or key == 'l':
+            controls.cmd_queue.put('seek_forward')
+        elif key == readchar.key.LEFT or key == 'h':
+            controls.cmd_queue.put('seek_backward')
+        elif key in ('n', readchar.key.DOWN):
+            controls.cmd_queue.put('next_chapter')
+        elif key in ('p', readchar.key.UP):
+            controls.cmd_queue.put('prev_chapter')
+        elif key in ('q', readchar.key.CTRL_C):
+            controls.cmd_queue.put('quit')
+
+
+def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
+                    controls: PlayerControls, chapters: List[Dict], chapter_idx: int) -> str:
     """
     Split chapter into chunks, generate TTS progressively, play as ready.
     Display live buffer/progress visualization during playback.
@@ -507,12 +633,13 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str):
     print(f"\n📚 {chapter_name}")
     print(f"   {total_chunks} sections to generate and play")
     print(f"   Speed: {speed}x  Voice: {voice}")
-    print(f"\nPress Ctrl+C to stop\n")
+    print(f"   Controls: [Space] Pause  [←/→] ±5s  [n/p] Chapter  [q] Quit\n")
     time.sleep(1)
 
     audio_queue = queue.Queue(maxsize=3)  # Buffer 3 chunks
     stop_event = threading.Event()
     error_happened = [False]
+    chapter_result = 'done'  # Default result
 
     def producer():
         """Generate TTS for each chunk in background.
@@ -555,13 +682,15 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str):
     producer_thread = threading.Thread(target=producer, daemon=True)
     producer_thread.start()
 
+    # Start keyboard reader thread
+    keyboard_stop = threading.Event()
+    keyboard_thread = threading.Thread(target=_keyboard_reader, args=(controls, keyboard_stop), daemon=True)
+    keyboard_thread.start()
+
     # Main thread plays chunks as they become available
     # Buffer 2 chunks together to avoid choppiness at transitions
     buffered_samples = None
     buffered_sr = None
-
-    def display_fn(first_render=False):
-        render_display(state, chapter_name, voice.split('-')[1][:4], speed, first_render)
 
     try:
         while True:
@@ -572,10 +701,11 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str):
                     state.chunks_played += 1
                     try:
                         play_audio_with_display(buffered_samples, buffered_sr, state,
-                                               display_fn, chapter_name, voice, speed)
-                    except KeyboardInterrupt:
-                        stop_event.set()
-                        raise
+                                               chapter_name, voice.split('-')[1][:4], speed,
+                                               controls)
+                    except ChapterChangeRequest as e:
+                        chapter_result = e.direction
+                        break
                 break
 
             samples, sr = item
@@ -591,10 +721,11 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str):
 
                 try:
                     play_audio_with_display(combined, sr, state,
-                                           display_fn, chapter_name, voice, speed)
-                except KeyboardInterrupt:
-                    stop_event.set()
-                    raise
+                                           chapter_name, voice.split('-')[1][:4], speed,
+                                           controls)
+                except ChapterChangeRequest as e:
+                    chapter_result = e.direction
+                    break
 
                 # Current chunk becomes the new buffer
                 buffered_samples = None
@@ -603,15 +734,26 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str):
             if stop_event.is_set():
                 break
 
-        if not error_happened[0]:
-            # Final display update showing completion
-            state.chunks_played = state.total_chunks
-            render_display(state, chapter_name, voice, speed, first_render=False)
+        if not error_happened[0] and chapter_result == 'done':
             print("\n✓ Playback complete\n")
 
     except KeyboardInterrupt:
         stop_event.set()
+        chapter_result = 'quit'
         print("\n✓ Stopped by user")
+    finally:
+        # Stop all threads
+        stop_event.set()
+        keyboard_stop.set()
+        try:
+            if sd:
+                sd.stop()
+        except:
+            pass
+        keyboard_thread.join(timeout=0.5)
+        producer_thread.join(timeout=0.5)
+
+    return chapter_result
 
 
 def settings_menu(default_speed: float = 1.0, default_voice: str = "en-US-AriaNeural") -> Tuple[Optional[float], Optional[str]]:
@@ -703,20 +845,8 @@ def main():
             print("Cancelled.")
             return 0
 
-        # Step 4: Extract text
-        print(f"\n📄 Extracting text from {chapter['title']}...")
-        text = extract_pdf_text(pdf_path, chapter['start_page'], chapter['end_page'])
-
-        word_count = len(text.split())
-        print(f"✓ Extracted {word_count} words (~{word_count / 130:.0f} minutes)")
-
-        # Step 5: Preprocess
-        print("🧹 Preprocessing...")
-        text = preprocess_text(text)
-
-        if not text:
-            print("❌ No text to process")
-            return 1
+        # Get chapter index
+        chapter_idx = next((i for i, ch in enumerate(chapters) if ch['num'] == chapter['num']), 0)
 
         # Step 6: Settings menu (voice and speed) - load saved defaults
         saved_settings = load_settings()
@@ -729,12 +859,46 @@ def main():
         # Save settings for next time
         save_settings(speed, voice)
 
-        # Step 7: Stream and play with visualization
-        try:
-            stream_and_play(text, voice, speed, chapter['title'])
-        except Exception as e:
-            print(f"❌ Playback failed: {e}")
-            return 1
+        # Create player controls (shared across chapter changes)
+        controls = PlayerControls()
+
+        # Step 7: Playback loop with chapter navigation
+        while True:
+            chapter = chapters[chapter_idx]
+
+            # Step 4: Extract text
+            print(f"\n📄 Extracting text from {chapter['title']}...")
+            text = extract_pdf_text(pdf_path, chapter['start_page'], chapter['end_page'])
+
+            word_count = len(text.split())
+            print(f"✓ Extracted {word_count} words (~{word_count / 130:.0f} minutes)")
+
+            # Step 5: Preprocess
+            print("🧹 Preprocessing...")
+            text = preprocess_text(text)
+
+            if not text:
+                print("❌ No text to process")
+                return 1
+
+            # Stream and play with visualization
+            try:
+                result = stream_and_play(text, voice, speed, chapter['title'],
+                                        controls, chapters, chapter_idx)
+            except Exception as e:
+                print(f"❌ Playback failed: {e}")
+                return 1
+
+            # Handle chapter navigation
+            if result == 'next_chapter' and chapter_idx < len(chapters) - 1:
+                chapter_idx += 1
+                continue
+            elif result == 'prev_chapter' and chapter_idx > 0:
+                chapter_idx -= 1
+                continue
+            else:
+                # 'done', 'quit', or boundary reached
+                break
 
         return 0
 
