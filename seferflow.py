@@ -419,28 +419,36 @@ def render_display(state: PlaybackState, chapter_name: str, voice_short: str, sp
 
 def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: PlaybackState,
                             render_fn, chapter_name: str, voice_short: str, speed: float):
-    """Play audio while displaying live buffer/progress updates."""
+    """Play audio while displaying live buffer/progress updates.
+
+    Display updates run in a separate daemon thread to avoid blocking the audio playback.
+    This eliminates GIL contention that was causing 0.5-1s pauses every 4-5 seconds.
+    """
     samples = normalize_audio(samples)
     state.play_start_time = time.time()
     state.play_chunk_duration = len(samples) / sample_rate
 
-    # First render (shows header)
-    render_fn(first_render=True)
-
     try:
         if sd:
-            # Non-blocking play with polling
-            sd.play(samples, sample_rate, blocksize=2048)
+            # Launch display thread independently of audio playback
+            display_stop = threading.Event()
 
-            while True:
-                elapsed = time.time() - state.play_start_time
-                if elapsed >= state.play_chunk_duration + 0.1:  # small tolerance
-                    break
+            def _display_loop():
+                """Update display every 400ms while audio plays."""
+                render_fn(first_render=True)
+                while not display_stop.wait(0.4):
+                    render_fn(first_render=False)
 
-                render_fn(first_render=False)
-                time.sleep(0.4)  # Update display every 400ms
+            display_thread = threading.Thread(target=_display_loop, daemon=True)
+            display_thread.start()
 
-            sd.wait()  # Ensure playback finishes
+            try:
+                # Audio plays cleanly with zero terminal I/O in this path
+                sd.play(samples, sample_rate, blocksize=2048)
+                sd.wait()  # Pure blocking, no GIL contention
+            finally:
+                display_stop.set()
+                display_thread.join(timeout=1.0)
         else:
             # Fallback to aplay (no display updates)
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
@@ -480,14 +488,31 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str):
     error_happened = [False]
 
     def producer():
-        """Generate TTS for each chunk in background."""
+        """Generate TTS for each chunk in background.
+
+        Uses hysteresis: waits until queue drains to ≤1 items before generating
+        the next chunk. This gives the system "downtime" between generations and
+        prevents aggressive queue filling.
+        """
         for i, chunk in enumerate(chunks):
             if stop_event.is_set():
                 break
+
+            # Hysteresis: wait for queue to drain before generating next chunk
+            while audio_queue.qsize() >= 2 and not stop_event.is_set():
+                time.sleep(0.2)
+
+            if stop_event.is_set():
+                break
+
             try:
                 samples, sr = generate_speech(chunk, voice, speed)
                 duration = len(samples) / sr
                 state.chunk_durations.append(duration)
+                audio_queue.put((samples, sr), block=False)  # non-blocking safe now
+                state.chunks_generated += 1
+            except queue.Full:
+                # Queue shouldn't be full with hysteresis, but handle gracefully
                 audio_queue.put((samples, sr))
                 state.chunks_generated += 1
             except Exception as e:
