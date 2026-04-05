@@ -444,7 +444,9 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
 
             try:
                 # Audio plays cleanly with zero terminal I/O in this path
-                sd.play(samples, sample_rate, blocksize=2048)
+                # Use default blocksize (0) for adaptive latency, and specify
+                # a reasonable latency to avoid buffer underruns
+                sd.play(samples, sample_rate, latency='low')
                 sd.wait()  # Pure blocking, no GIL contention
             finally:
                 display_stop.set()
