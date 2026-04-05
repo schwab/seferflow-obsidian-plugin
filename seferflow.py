@@ -312,6 +312,31 @@ def generate_speech(text: str, voice: str = "en-US-AriaNeural", speed: float = 1
         raise
 
 
+def trim_silence(samples: np.ndarray, threshold: float = 0.01) -> np.ndarray:
+    """Remove silence from start and end of audio.
+
+    Edge-TTS streams small MP3 chunks that each have silence padding at
+    the beginning and end. This silence accumulates between concatenated
+    chunks, causing noticeable pauses. Trimming it eliminates the gaps.
+    """
+    if len(samples) == 0:
+        return samples
+
+    # Find where audio amplitude exceeds threshold
+    mask = np.abs(samples) > threshold
+
+    if not np.any(mask):
+        # Entire chunk is silence
+        return samples[:0]  # Return empty array
+
+    # Find first and last non-silent sample
+    nonzero = np.where(mask)[0]
+    start = nonzero[0]
+    end = nonzero[-1] + 1
+
+    return samples[start:end]
+
+
 def normalize_audio(samples: np.ndarray) -> np.ndarray:
     """Normalize audio with 0.9 headroom factor."""
     peak = np.max(np.abs(samples))
@@ -509,6 +534,8 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str):
 
             try:
                 samples, sr = generate_speech(chunk, voice, speed)
+                # Trim silence from start/end of each chunk to eliminate gaps
+                samples = trim_silence(samples)
                 duration = len(samples) / sr
                 state.chunk_durations.append(duration)
                 audio_queue.put((samples, sr), block=False)  # non-blocking safe now
