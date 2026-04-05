@@ -1,0 +1,652 @@
+#!/usr/bin/env python3
+"""
+Simple, Robust Book Reader with File Browser
+Streaming TTS generation with live buffer visualization - no terminal crashes.
+"""
+
+import os
+import sys
+import subprocess
+import re
+import json
+import time
+import tempfile
+import threading
+import queue
+import shutil
+from pathlib import Path
+from typing import Optional, List, Dict, Tuple
+from dataclasses import dataclass
+import numpy as np
+
+try:
+    import soundfile as sf
+except ImportError:
+    print("❌ Error: soundfile not installed")
+    sys.exit(1)
+
+try:
+    import sounddevice as sd
+except ImportError:
+    print("⚠ Warning: sounddevice not available, will use aplay")
+    sd = None
+
+
+# ANSI color codes
+GREEN = '\x1b[32m'
+YELLOW = '\x1b[33m'
+CYAN = '\x1b[36m'
+DARK_GRAY = '\x1b[90m'
+RESET = '\x1b[0m'
+
+
+@dataclass
+class PlaybackState:
+    """Shared state between producer and consumer threads."""
+    total_chunks: int = 0
+    chunks_generated: int = 0
+    chunks_played: int = 0
+    queue_max: int = 3
+    generating: bool = True
+    chunk_durations: list = None  # List of durations for each chunk
+    play_start_time: float = 0.0
+    play_chunk_duration: float = 0.0
+    play_chunk_index: int = 0
+
+    def __post_init__(self):
+        if self.chunk_durations is None:
+            self.chunk_durations = []
+
+
+def clear_screen():
+    """Clear terminal."""
+    os.system('clear' if os.name == 'posix' else 'cls')
+
+
+def clean_input(prompt: str) -> str:
+    """Read input and strip ANSI escape sequences (from arrow keys, etc)."""
+    raw = input(prompt)
+    # Strip ANSI escape sequences like ^[[A from arrow keys
+    return re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', raw).strip()
+
+
+def browse_books(start_dir: str = "/home/mcstar/Nextcloud/Vault/books") -> Optional[str]:
+    """File browser showing both directories and PDF files."""
+    current_dir = start_dir
+
+    while True:
+        clear_screen()
+        print("\n" + "=" * 70)
+        print("📚 SELECT A BOOK")
+        print("=" * 70)
+        print(f"\nDirectory: {current_dir}\n")
+
+        try:
+            all_items = sorted(os.listdir(current_dir))
+        except PermissionError:
+            print("❌ Permission denied")
+            return None
+
+        # Separate directories and PDFs
+        entries = []
+        for item in all_items:
+            full_path = os.path.join(current_dir, item)
+            if os.path.isdir(full_path) and not item.startswith('.'):
+                entries.append((f"[DIR] {item}", full_path, 'dir'))
+            elif item.lower().endswith('.pdf'):
+                entries.append((item, full_path, 'pdf'))
+
+        if not entries:
+            print("No PDF files or directories found.\n")
+            print("[b] Go back  [q] Quit")
+            choice = clean_input("Choice: ").lower()
+            if choice == 'b':
+                parent = os.path.dirname(current_dir)
+                if parent != current_dir:
+                    current_dir = parent
+                continue
+            return None
+
+        # Show entries
+        for i, (display_name, _, _) in enumerate(entries, 1):
+            print(f"  {i}. {display_name}")
+        print(f"\n  [b] Go back  [q] Quit")
+
+        choice = clean_input("\nEnter number or [b]/[q]: ").lower()
+
+        if choice == 'q':
+            return None
+        elif choice == 'b':
+            parent = os.path.dirname(current_dir)
+            if parent != current_dir:
+                current_dir = parent
+        else:
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(entries):
+                    _, path, item_type = entries[idx]
+                    if item_type == 'dir':
+                        current_dir = path
+                    else:
+                        return path
+            except ValueError:
+                pass
+
+
+def get_chapters(pdf_path: str) -> Optional[List[Dict]]:
+    """Get chapters from PDF."""
+    try:
+        result = subprocess.run(
+            [sys.executable, '-c',
+             f'''import sys; sys.path.insert(0, "/home/mcstar/.openclaw/workspace-dev"); from book_extractor import detect_chapters; chapters, source = detect_chapters("{pdf_path}"); import json; print(json.dumps([(c["num"], c["title"], c["start_page"], c["end_page"]) for c in chapters] if chapters else []))'''],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            chapters_data = json.loads(result.stdout)
+            return [{"num": c[0], "title": c[1], "start_page": c[2], "end_page": c[3]}
+                    for c in chapters_data]
+    except Exception as e:
+        print(f"⚠ Error detecting chapters: {e}")
+    return None
+
+
+def select_chapter(chapters: List[Dict]) -> Optional[Dict]:
+    """Simple chapter selection."""
+    clear_screen()
+    print("\n" + "=" * 70)
+    print("📖 SELECT CHAPTER")
+    print("=" * 70 + "\n")
+
+    for ch in chapters:
+        print(f"  {ch['num']}. {ch['title']} (pp. {ch['start_page']}-{ch['end_page']})")
+
+    print(f"\n  [q] Cancel\n")
+
+    choice = clean_input("Enter chapter number or [q]: ").lower()
+    if choice == 'q':
+        return None
+
+    try:
+        ch_num = int(choice)
+        for ch in chapters:
+            if ch['num'] == ch_num:
+                return ch
+    except ValueError:
+        pass
+
+    print("❌ Invalid choice")
+    time.sleep(1)
+    return select_chapter(chapters)
+
+
+def extract_pdf_text(pdf_path: str, start_page: int = 1, end_page: Optional[int] = None) -> str:
+    """Extract text from PDF."""
+    try:
+        args = ['pdftotext', '-f', str(start_page)]
+        if end_page:
+            args.extend(['-l', str(end_page)])
+        args.extend([pdf_path, '-'])
+
+        result = subprocess.run(args, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr)
+        return result.stdout
+    except Exception as e:
+        raise RuntimeError(f"PDF extraction failed: {e}")
+
+
+def preprocess_text(text: str) -> str:
+    """Clean text."""
+    text = re.sub(r'-\n', '', text)
+    text = re.sub(r' +', ' ', text)
+    text = re.sub(r'\n\s*\n', '\n\n', text)
+    replacements = {
+        r'\bDr\.': 'Doctor',
+        r'\bMr\.': 'Mister',
+        r'\bMrs\.': 'Missus',
+        r'\bRev\.': 'Reverend'
+    }
+    for pattern, repl in replacements.items():
+        text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
+    return text.strip()
+
+
+def split_into_chunks(text: str, max_chars: int = 2000) -> List[str]:
+    """Split text into chunks by paragraphs, staying within max_chars per chunk."""
+    paragraphs = re.split(r'\n{2,}', text)
+    chunks = []
+    current_chunk = ""
+
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+
+        # If adding this paragraph would exceed max, save current chunk
+        if current_chunk and len(current_chunk) + len(para) > max_chars:
+            chunks.append(current_chunk.strip())
+            current_chunk = para
+        else:
+            current_chunk = (current_chunk + "\n\n" + para).strip() if current_chunk else para
+
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+
+    return [c for c in chunks if c]
+
+
+def generate_speech(text: str, voice: str = "en-US-AriaNeural", speed: float = 1.0) -> Tuple[np.ndarray, int]:
+    """Generate speech for a text chunk."""
+    try:
+        import edge_tts
+        import asyncio
+        import io
+
+        async def gen():
+            comm = edge_tts.Communicate(text, voice, rate=f"{int((speed - 1) * 100):+d}%")
+            chunks = []
+            async for chunk in comm.stream():
+                if chunk["type"] == "audio":
+                    chunks.append(chunk["data"])
+            return b''.join(chunks)
+
+        try:
+            audio_bytes = asyncio.run(gen())
+        except RuntimeError:
+            # Fallback for event loop issues
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                audio_bytes = loop.run_until_complete(gen())
+            finally:
+                loop.close()
+
+        with io.BytesIO(audio_bytes) as f:
+            data, sr = sf.read(f, dtype=np.float32)
+
+        return data, sr
+
+    except Exception as e:
+        print(f"❌ TTS Error: {e}")
+        raise
+
+
+def normalize_audio(samples: np.ndarray) -> np.ndarray:
+    """Normalize audio with 0.9 headroom factor."""
+    peak = np.max(np.abs(samples))
+    if peak > 0:
+        samples = samples * (0.9 / peak)
+    return samples
+
+
+def fmt_time(seconds: float) -> str:
+    """Format seconds as MM:SS."""
+    mins = int(seconds) // 60
+    secs = int(seconds) % 60
+    return f"{mins}:{secs:02d}"
+
+
+def make_progress_bar(total: int, played: int, buffered: int, width: int = 40) -> str:
+    """
+    Render progress bar with colors:
+    Green █ = played, Yellow ▓ = buffered, Gray ░ = pending
+    """
+    if total == 0:
+        return "0 / 0"
+
+    # Calculate proportional widths
+    played_width = max(1, width * played // total)
+    buffered_width = max(0, width * buffered // total)
+    pending_width = width - played_width - buffered_width
+
+    bar = (GREEN + '█' * played_width +
+           YELLOW + '▓' * buffered_width +
+           DARK_GRAY + '░' * pending_width +
+           RESET)
+
+    percent = 100 * played // total if total > 0 else 0
+    return f"{bar}  {percent}%"
+
+
+def make_buffer_bar(current: int, max_size: int, width: int = 15) -> str:
+    """Render buffer fill level."""
+    filled = min(current, max_size)
+    filled_width = max(1, width * filled // max_size)
+    empty_width = width - filled_width
+
+    bar = (GREEN + '▓' * filled_width +
+           DARK_GRAY + '░' * empty_width +
+           RESET)
+
+    return f"[{bar}]  {filled}/{max_size}"
+
+
+def render_display(state: PlaybackState, chapter_name: str, voice_short: str, speed: float,
+                   first_render: bool = False) -> None:
+    """Render live buffer/progress display. Updates in-place using ANSI cursor movement."""
+    DISPLAY_LINES = 8
+
+    if not first_render:
+        # Move cursor up to overwrite previous display
+        sys.stdout.write(f'\x1b[{DISPLAY_LINES}A\r')
+        sys.stdout.flush()
+
+    cols = min(shutil.get_terminal_size().columns - 2, 70)
+
+    # Line 1: Separator
+    print("─" * cols)
+
+    # Line 2: Status header
+    status = f"{GREEN}▶{RESET} PLAYING" if state.generating or state.chunks_played < state.total_chunks else f"{GREEN}✓{RESET} DONE"
+    chapter_short = chapter_name[:35].ljust(35)
+    print(f"{status}   {chapter_short}  {speed}x  {voice_short}")
+
+    # Line 3: Section + time info
+    elapsed = time.time() - state.play_start_time if state.play_start_time > 0 else 0
+    total_estimated = sum(state.chunk_durations) if state.chunk_durations else 0
+    if state.chunks_played < len(state.chunk_durations):
+        remaining = sum(state.chunk_durations[state.chunks_played:])
+    else:
+        remaining = 0
+    total_est = elapsed + remaining
+
+    time_str = f"{fmt_time(elapsed)} / ~{fmt_time(total_est)}"
+    section_str = f"Section {state.chunks_played + 1} of {state.total_chunks}"
+    print(f"  {section_str}   {time_str}")
+
+    # Line 4: Progress bar (overall chunks)
+    buffered = state.chunks_generated - state.chunks_played
+    progress_bar = make_progress_bar(state.total_chunks, state.chunks_played, buffered)
+    print(f"  Progress:  {progress_bar}")
+
+    # Line 5: Buffer meter
+    buffer_bar = make_buffer_bar(state.chunks_generated - state.chunks_played, state.queue_max)
+    gen_status = "↺ generating..." if state.generating else "✓ all generated"
+    print(f"  Buffer:    {buffer_bar}   {CYAN}{gen_status}{RESET}")
+
+    # Line 6: Blank
+    print()
+
+    # Line 7: Instructions
+    print(f"  {DARK_GRAY}Ctrl+C to stop{RESET}")
+
+    # Line 8: Separator
+    print("─" * cols)
+
+    sys.stdout.flush()
+
+
+def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: PlaybackState,
+                            render_fn, chapter_name: str, voice_short: str, speed: float):
+    """Play audio while displaying live buffer/progress updates."""
+    samples = normalize_audio(samples)
+    state.play_start_time = time.time()
+    state.play_chunk_duration = len(samples) / sample_rate
+
+    # First render (shows header)
+    render_fn(first_render=True)
+
+    try:
+        if sd:
+            # Non-blocking play with polling
+            sd.play(samples, sample_rate, blocksize=2048)
+
+            while True:
+                elapsed = time.time() - state.play_start_time
+                if elapsed >= state.play_chunk_duration + 0.1:  # small tolerance
+                    break
+
+                render_fn(first_render=False)
+                time.sleep(0.4)  # Update display every 400ms
+
+            sd.wait()  # Ensure playback finishes
+        else:
+            # Fallback to aplay (no display updates)
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+                temp_wav = f.name
+            sf.write(temp_wav, samples, sample_rate)
+            subprocess.run(['aplay', temp_wav], check=True)
+            os.unlink(temp_wav)
+
+    except KeyboardInterrupt:
+        if sd:
+            try:
+                sd.stop()
+            except:
+                pass
+        raise
+
+
+def stream_and_play(text: str, voice: str, speed: float, chapter_name: str):
+    """
+    Split chapter into chunks, generate TTS progressively, play as ready.
+    Display live buffer/progress visualization during playback.
+    """
+    chunks = split_into_chunks(text)
+    total_chunks = len(chunks)
+
+    # Create shared state
+    state = PlaybackState(total_chunks=total_chunks, queue_max=3)
+
+    print(f"\n📚 {chapter_name}")
+    print(f"   {total_chunks} sections to generate and play")
+    print(f"   Speed: {speed}x  Voice: {voice}")
+    print(f"\nPress Ctrl+C to stop\n")
+    time.sleep(1)
+
+    audio_queue = queue.Queue(maxsize=3)  # Buffer 3 chunks
+    stop_event = threading.Event()
+    error_happened = [False]
+
+    def producer():
+        """Generate TTS for each chunk in background."""
+        for i, chunk in enumerate(chunks):
+            if stop_event.is_set():
+                break
+            try:
+                samples, sr = generate_speech(chunk, voice, speed)
+                duration = len(samples) / sr
+                state.chunk_durations.append(duration)
+                audio_queue.put((samples, sr))
+                state.chunks_generated += 1
+            except Exception as e:
+                print(f"\n❌ TTS generation failed for chunk {i+1}: {e}")
+                error_happened[0] = True
+                stop_event.set()
+                break
+        state.generating = False
+        audio_queue.put(None)  # Sentinel
+
+    producer_thread = threading.Thread(target=producer, daemon=True)
+    producer_thread.start()
+
+    # Main thread plays chunks as they become available
+    # Buffer 2 chunks together to avoid choppiness at transitions
+    buffered_samples = None
+    buffered_sr = None
+
+    def display_fn(first_render=False):
+        render_display(state, chapter_name, voice.split('-')[1][:4], speed, first_render)
+
+    try:
+        while True:
+            item = audio_queue.get()  # Blocks until chunk is ready
+            if item is None:
+                # Last chunk - play any buffered audio
+                if buffered_samples is not None:
+                    state.chunks_played += 1
+                    try:
+                        play_audio_with_display(buffered_samples, buffered_sr, state,
+                                               display_fn, chapter_name, voice, speed)
+                    except KeyboardInterrupt:
+                        stop_event.set()
+                        raise
+                break
+
+            samples, sr = item
+
+            if buffered_samples is None:
+                # First chunk - just buffer it
+                buffered_samples = samples
+                buffered_sr = sr
+            else:
+                # We have a buffered chunk - concatenate and play
+                state.chunks_played += 1
+                combined = np.concatenate([buffered_samples, samples])
+
+                try:
+                    play_audio_with_display(combined, sr, state,
+                                           display_fn, chapter_name, voice, speed)
+                except KeyboardInterrupt:
+                    stop_event.set()
+                    raise
+
+                # Current chunk becomes the new buffer
+                buffered_samples = None
+                buffered_sr = None
+
+            if stop_event.is_set():
+                break
+
+        if not error_happened[0]:
+            # Final display update showing completion
+            state.chunks_played = state.total_chunks
+            render_display(state, chapter_name, voice, speed, first_render=False)
+            print("\n✓ Playback complete\n")
+
+    except KeyboardInterrupt:
+        stop_event.set()
+        print("\n✓ Stopped by user")
+
+
+def settings_menu(default_speed: float = 1.0, default_voice: str = "en-US-AriaNeural") -> Tuple[Optional[float], Optional[str]]:
+    """Show pre-generation settings menu with direct selection."""
+    speeds = [0.8, 0.9, 1.0, 1.1, 1.2, 1.3]
+    voices = [
+        ("a", "en-US-AriaNeural", "Female (US, default)"),
+        ("b", "en-US-GuyNeural", "Male (US)"),
+        ("c", "en-GB-LibbyNeural", "Female (British)"),
+        ("d", "en-GB-RyanNeural", "Male (British)"),
+    ]
+
+    current_speed = default_speed
+    current_voice = default_voice
+
+    while True:
+        clear_screen()
+        print("\n" + "=" * 70)
+        print("⚙️  PLAYBACK SETTINGS")
+        print("=" * 70 + "\n")
+
+        print(f"Speed: {current_speed}x")
+        for i, spd in enumerate(speeds, 1):
+            marker = " ← current" if spd == current_speed else ""
+            print(f"  [{i}] {spd}x{marker}")
+        print()
+
+        print(f"Voice: {current_voice}")
+        for code, voice_id, desc in voices:
+            marker = " ← current" if voice_id == current_voice else ""
+            print(f"  [{code}] {desc}{marker}")
+        print()
+
+        print("[Enter] Start reading  [q] Cancel\n")
+
+        choice = clean_input("Enter speed [1-6], voice [a-d], or [Enter]/[q]: ").lower()
+
+        if choice == 'q':
+            return None, None
+        elif choice == '':
+            # Start reading with current settings
+            return current_speed, current_voice
+        elif choice in ('1', '2', '3', '4', '5', '6'):
+            # Direct speed selection
+            idx = int(choice) - 1
+            current_speed = speeds[idx]
+        elif choice in ('a', 'b', 'c', 'd'):
+            # Direct voice selection
+            for code, voice_id, _ in voices:
+                if choice == code:
+                    current_voice = voice_id
+                    break
+        # Otherwise loop back
+
+
+def main():
+    """Main program flow."""
+    print("\n" + "=" * 70)
+    print("📚 BOOK READER - Starting up...".center(70))
+    print("=" * 70)
+    time.sleep(1)
+
+    try:
+        # Step 1: Browse and select book
+        pdf_path = browse_books()
+        if not pdf_path:
+            print("\nCancelled.")
+            return 0
+
+        book_name = os.path.basename(pdf_path)
+        print(f"\n📖 Selected: {book_name}")
+
+        # Step 2: Detect chapters
+        print("🔍 Detecting chapters...")
+        chapters = get_chapters(pdf_path)
+
+        if not chapters:
+            print("⚠ No chapters detected, will read entire book")
+            chapters = [{
+                'num': 1,
+                'title': 'Full Book',
+                'start_page': 1,
+                'end_page': None
+            }]
+
+        # Step 3: Select chapter
+        chapter = select_chapter(chapters)
+        if not chapter:
+            print("Cancelled.")
+            return 0
+
+        # Step 4: Extract text
+        print(f"\n📄 Extracting text from {chapter['title']}...")
+        text = extract_pdf_text(pdf_path, chapter['start_page'], chapter['end_page'])
+
+        word_count = len(text.split())
+        print(f"✓ Extracted {word_count} words (~{word_count / 130:.0f} minutes)")
+
+        # Step 5: Preprocess
+        print("🧹 Preprocessing...")
+        text = preprocess_text(text)
+
+        if not text:
+            print("❌ No text to process")
+            return 1
+
+        # Step 6: Settings menu (voice and speed)
+        speed, voice = settings_menu()
+        if speed is None:
+            print("Cancelled.")
+            return 0
+
+        # Step 7: Stream and play with visualization
+        try:
+            stream_and_play(text, voice, speed, chapter['title'])
+        except Exception as e:
+            print(f"❌ Playback failed: {e}")
+            return 1
+
+        return 0
+
+    except KeyboardInterrupt:
+        print("\n\n✓ Cancelled by user")
+        return 0
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
