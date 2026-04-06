@@ -51,7 +51,20 @@ A complete platform for converting PDF books into natural-sounding audiobooks us
 - **Chapter Navigation** - Jump between sections
 - **Progress Persistence** - Resume from last position
 
-**Installation**: See [obsidian-plugin/README.md](obsidian-plugin/README.md) for plugin setup and configuration.
+**Install Plugin Separately**:
+```bash
+# Clone the plugin separately
+git clone https://github.com/schwab/seferflow-obsidian-plugin.git
+cd seferflow-obsidian-plugin
+
+# Copy to Obsidian plugins folder
+mkdir -p ~/.config/obsidian/community-plugins
+cp -r seferflow-obsidian-plugin ~/.config/obsidian/community-plugins/seferflow-obsidian-plugin
+
+# Enable plugin in Obsidian Settings → Community Plugins
+```
+
+See [plugin README](https://github.com/schwab/seferflow-obsidian-plugin/blob/main/README.md) for setup instructions.
 
 ### 🔧 Technical Features
 - **Producer/Consumer Pattern** - Background TTS generation with bounded memory
@@ -240,15 +253,20 @@ curl http://localhost:8000/api/v1/pdfs/library/book.pdf/chapters \
 
 See [seferflow-api/README.md](seferflow-api/README.md) for complete API documentation.
 
-### Obsidian Plugin
+### 📱 Obsidian Plugin
 
-Create audiobook playlists directly in your Obsidian vault:
+**Install Obsidian Plugin Separately**:
 
 ```bash
-# Install plugin from Obsidian Community Plugins browser
-# Or clone into your plugins directory:
-git clone https://github.com/schwab/seferflow-obsidian-plugin.git \
-  --depth 1 ~/.obsidian/plugins/seferflow
+# Clone the plugin repository
+git clone https://github.com/schwab/seferflow-obsidian-plugin.git
+cd seferflow-obsidian-plugin
+
+# Copy to your Obsidian plugins folder
+mkdir -p ~/.config/obsidian/community-plugins
+cp -r seferflow-obsidian-plugin ~/.config/obsidian/community-plugins/
+
+# Or use Obsidian Community Plugins browser to install
 ```
 
 **Features**:
@@ -258,7 +276,7 @@ git clone https://github.com/schwab/seferflow-obsidian-plugin.git \
 - One-click playback with synchronized scrolling
 - Resume from last position across devices
 
-See [obsidian-plugin/README.md](obsidian-plugin/README.md) for plugin setup and configuration.
+See [plugin README](https://github.com/schwab/seferflow-obsidian-plugin) for full setup and API documentation.
 
 ## Architecture
 
