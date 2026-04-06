@@ -16,6 +16,7 @@ import queue
 import shutil
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
+from datetime import datetime
 from dataclasses import dataclass, field
 import numpy as np
 
@@ -86,6 +87,7 @@ class ChapterChangeRequest(Exception):
 
 # Settings persistence
 CONFIG_PATH = Path.home() / ".config" / "seferflow" / "settings.json"
+PROGRESS_PATH = Path.home() / ".config" / "seferflow" / "progress.json"
 
 # Rich console for styled display
 if RICH_AVAILABLE:
@@ -135,6 +137,91 @@ def save_settings(speed: float, voice: str, buffer_size: int = 6) -> None:
         pass  # Non-fatal: just don't save
 
 
+# ─────────────────────────────────────────────────────────────
+# Progress Tracking — track which sections have been listened to
+# ─────────────────────────────────────────────────────────────
+
+def load_progress() -> Dict:
+    """Load progress.json; return {} on missing file or parse error."""
+    try:
+        if PROGRESS_PATH.exists():
+            with open(PROGRESS_PATH, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def save_progress(pdf_path: str, chapter_name: str, last_chunk: int, total_chunks: int) -> None:
+    """Save progress for a chapter. last_chunk is 0-based index of furthest chunk reached.
+    Uses max() internally so backward seeks don't erase progress."""
+    try:
+        data = load_progress()
+        if pdf_path not in data:
+            data[pdf_path] = {}
+
+        # Use max() so backward seeks don't erase progress
+        existing = data[pdf_path].get(chapter_name, {})
+        existing_last = existing.get("last_chunk", -1)
+        new_last = max(last_chunk, existing_last)
+
+        data[pdf_path][chapter_name] = {
+            "last_chunk": new_last,
+            "total_chunks": total_chunks,
+            "listened_at": datetime.now().isoformat(timespec='seconds')
+        }
+
+        PROGRESS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(PROGRESS_PATH, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass  # Non-fatal: just don't save
+
+
+def get_chapter_progress(pdf_path: str, chapter_name: str) -> Optional[Dict]:
+    """Return {"last_chunk": int, "total_chunks": int, "listened_at": str} or None."""
+    data = load_progress()
+    return data.get(pdf_path, {}).get(chapter_name)
+
+
+def chapter_status(pdf_path: str, chapter_name: str) -> str:
+    """Return "new" | "partial" | "complete"."""
+    prog = get_chapter_progress(pdf_path, chapter_name)
+    if prog is None:
+        return "new"
+    if prog["last_chunk"] + 1 >= prog["total_chunks"]:
+        return "complete"
+    return "partial"
+
+
+def file_progress_status(pdf_path: str) -> str:
+    """Return "none" | "partial" | "complete" based on all chapter entries for this pdf."""
+    data = load_progress()
+    chapters_data = data.get(pdf_path, {})
+
+    if not chapters_data:
+        return "none"
+
+    # Check if any chapter is partial
+    for ch_data in chapters_data.values():
+        last = ch_data.get("last_chunk", 0)
+        total = ch_data.get("total_chunks", 1)
+        if 0 < last < total - 1:
+            return "partial"
+
+    # If we get here, all entries are either new or complete
+    # Check if all are complete
+    all_complete = True
+    for ch_data in chapters_data.values():
+        last = ch_data.get("last_chunk", 0)
+        total = ch_data.get("total_chunks", 1)
+        if last + 1 < total:
+            all_complete = False
+            break
+
+    return "complete" if all_complete else "partial"
+
+
 def clear_screen():
     """Clear terminal."""
     os.system('clear' if os.name == 'posix' else 'cls')
@@ -147,9 +234,21 @@ def clean_input(prompt: str) -> str:
     return re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', raw).strip()
 
 
+def paginate(items: list, page: int, page_size: int) -> Tuple[list, int, int]:
+    """Return (page_items, total_pages, clamped_page). page is 0-based."""
+    if page_size <= 0:
+        page_size = 1
+    total_pages = (len(items) + page_size - 1) // page_size
+    page = max(0, min(page, total_pages - 1))
+    start = page * page_size
+    end = start + page_size
+    return items[start:end], total_pages, page
+
+
 def browse_books(start_dir: str = "/home/mcstar/Nextcloud/Vault/books") -> Optional[str]:
-    """File browser showing both directories and PDF files."""
+    """File browser showing both directories and PDF files with pagination and progress markers."""
     current_dir = start_dir
+    page = 0
 
     while True:
         clear_screen()
@@ -181,15 +280,37 @@ def browse_books(start_dir: str = "/home/mcstar/Nextcloud/Vault/books") -> Optio
                 parent = os.path.dirname(current_dir)
                 if parent != current_dir:
                     current_dir = parent
+                    page = 0
                 continue
             return None
 
-        # Show entries
-        for i, (display_name, _, _) in enumerate(entries, 1):
-            print(f"  {i}. {display_name}")
-        print(f"\n  [b] Go back  [q] Quit")
+        # Pagination
+        terminal_lines = 24
+        try:
+            terminal_lines = os.get_terminal_size().lines
+        except Exception:
+            pass
+        page_size = max(5, terminal_lines - 10)
+        page_entries, total_pages, page = paginate(entries, page, page_size)
 
-        choice = clean_input("\nEnter number or [b]/[q]: ").lower()
+        # Show entries with progress markers for PDFs
+        for i, (display_name, full_path, item_type) in enumerate(page_entries):
+            abs_num = page * page_size + i + 1
+            if item_type == 'pdf':
+                status = file_progress_status(full_path)
+                marker = {'none': ' ', 'partial': '~', 'complete': '✅'}[status]
+                print(f"  {abs_num:2d}. {marker} {display_name}")
+            else:
+                print(f"  {abs_num:2d}.   {display_name}")
+
+        # Navigation footer
+        footer = "[b] Back"
+        if total_pages > 1:
+            footer += f"  [<] Prev  [>] Next  (Page {page + 1}/{total_pages})"
+        footer += "  [q] Quit"
+        print(f"\n  {footer}")
+
+        choice = clean_input("\nEnter number, [<]/[>], [b], or [q]: ").lower()
 
         if choice == 'q':
             return None
@@ -197,6 +318,11 @@ def browse_books(start_dir: str = "/home/mcstar/Nextcloud/Vault/books") -> Optio
             parent = os.path.dirname(current_dir)
             if parent != current_dir:
                 current_dir = parent
+                page = 0
+        elif choice == '<':
+            page = max(0, page - 1)
+        elif choice == '>':
+            page = min(total_pages - 1, page + 1)
         else:
             try:
                 idx = int(choice) - 1
@@ -204,6 +330,7 @@ def browse_books(start_dir: str = "/home/mcstar/Nextcloud/Vault/books") -> Optio
                     _, path, item_type = entries[idx]
                     if item_type == 'dir':
                         current_dir = path
+                        page = 0
                     else:
                         return path
             except ValueError:
@@ -227,33 +354,68 @@ def get_chapters(pdf_path: str) -> Optional[List[Dict]]:
     return None
 
 
-def select_chapter(chapters: List[Dict]) -> Optional[Dict]:
-    """Simple chapter selection."""
-    clear_screen()
-    print("\n" + "=" * 70)
-    print("📖 SELECT CHAPTER")
-    print("=" * 70 + "\n")
+def select_chapter(chapters: List[Dict], pdf_path: str = "") -> Optional[Dict]:
+    """Chapter selection with pagination and progress markers."""
+    page = 0
 
-    for ch in chapters:
-        print(f"  {ch['num']}. {ch['title']} (pp. {ch['start_page']}-{ch['end_page']})")
+    while True:
+        clear_screen()
+        print("\n" + "=" * 70)
+        print("📖 SELECT CHAPTER")
+        print("=" * 70 + "\n")
 
-    print(f"\n  [q] Cancel\n")
+        # Pagination
+        terminal_lines = 24
+        try:
+            terminal_lines = os.get_terminal_size().lines
+        except Exception:
+            pass
+        page_size = max(5, terminal_lines - 10)
+        page_chapters, total_pages, page = paginate(chapters, page, page_size)
 
-    choice = clean_input("Enter chapter number or [q]: ").lower()
-    if choice == 'q':
-        return None
+        # Show chapters with progress markers
+        for ch in page_chapters:
+            if pdf_path:
+                prog = get_chapter_progress(pdf_path, ch['title'])
+                if prog is None:
+                    marker = " "
+                    pct_str = ""
+                else:
+                    pct = int(100 * (prog['last_chunk'] + 1) / max(prog['total_chunks'], 1))
+                    pct_str = f" [{pct:3d}%]"
+                    marker = "✅" if chapter_status(pdf_path, ch['title']) == "complete" else "~"
+            else:
+                marker = " "
+                pct_str = ""
 
-    try:
-        ch_num = int(choice)
-        for ch in chapters:
-            if ch['num'] == ch_num:
-                return ch
-    except ValueError:
-        pass
+            print(f"  {ch['num']}. {marker} {ch['title']}{pct_str} (pp. {ch['start_page']}-{ch['end_page']})")
 
-    print("❌ Invalid choice")
-    time.sleep(1)
-    return select_chapter(chapters)
+        # Navigation footer
+        footer = ""
+        if total_pages > 1:
+            footer += f"[<] Prev  [>] Next  (Page {page + 1}/{total_pages})  "
+        footer += "[q] Cancel"
+        print(f"\n  {footer}\n")
+
+        choice = clean_input("Enter chapter number, [<]/[>], or [q]: ").lower()
+
+        if choice == 'q':
+            return None
+        elif choice == '<':
+            page = max(0, page - 1)
+        elif choice == '>':
+            page = min(total_pages - 1, page + 1)
+        else:
+            try:
+                ch_num = int(choice)
+                for ch in chapters:
+                    if ch['num'] == ch_num:
+                        return ch
+                print("❌ Invalid chapter number")
+                time.sleep(1)
+            except ValueError:
+                print("❌ Invalid choice")
+                time.sleep(1)
 
 
 def extract_pdf_text(pdf_path: str, start_page: int = 1, end_page: Optional[int] = None) -> str:
@@ -870,20 +1032,26 @@ def _keyboard_reader(controls: PlayerControls, stop_event: threading.Event):
 
 def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
                     controls: PlayerControls, chapters: List[Dict], chapter_idx: int,
-                    buffer_size: int = 6) -> str:
+                    buffer_size: int = 6, start_chunk: int = 0, pdf_path: str = "") -> str:
     """
     Split chapter into chunks, generate TTS progressively, play as ready.
     Display live buffer/progress visualization during playback.
 
     Args:
         buffer_size: Audio queue size in chunks (3=conservative, 6=balanced, 10=aggressive)
+        start_chunk: Start from this chunk index (0-based) for resume functionality
+        pdf_path: Path to PDF for progress tracking
     """
     chunks = split_into_chunks(text)
     total_chunks = len(chunks)
 
+    # Guard: if start_chunk is beyond end, reset to 0
+    if start_chunk >= total_chunks:
+        start_chunk = 0
+
     # Create shared state
     # queue_max must match the actual audio_queue maxsize for accurate buffer display
-    state = PlaybackState(total_chunks=total_chunks, queue_max=buffer_size)
+    state = PlaybackState(total_chunks=total_chunks, queue_max=buffer_size, chunks_played=start_chunk)
 
     print(f"\n📚 {chapter_name}")
     print(f"   {total_chunks} sections to generate and play")
@@ -903,7 +1071,8 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
         Do NOT throttle or wait for queue to drain. Edge-TTS is slow (4-6s/chunk),
         and playback can consume 2 chunks in parallel. Queue MUST stay ahead.
         """
-        for i, chunk in enumerate(chunks):
+        # Skip chunks that have already been played (for resume)
+        for i, chunk in enumerate(chunks[start_chunk:], start=start_chunk):
             if stop_event.is_set():
                 break
 
@@ -959,6 +1128,10 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
 
             samples, sr = item
             state.chunks_played += 1
+
+            # Save progress after each chunk
+            if pdf_path:
+                save_progress(pdf_path, chapter_name, state.chunks_played - 1, total_chunks)
 
             try:
                 # Play this single chunk directly (no concatenation)
@@ -1097,7 +1270,7 @@ def main():
             }]
 
         # Step 3: Select chapter
-        chapter = select_chapter(chapters)
+        chapter = select_chapter(chapters, pdf_path=pdf_path)
         if not chapter:
             print("Cancelled.")
             return 0
@@ -1139,10 +1312,34 @@ def main():
                 print("❌ No text to process")
                 return 1
 
+            # Check for saved progress and offer resume
+            start_chunk = 0
+            prog = get_chapter_progress(pdf_path, chapter['title'])
+            if prog and prog['total_chunks'] > 0 and chapter_status(pdf_path, chapter['title']) != 'complete':
+                last = prog['last_chunk']
+                total = prog['total_chunks']
+                pct = int(100 * (last + 1) / max(total, 1))
+                print(f"\n📌 Previous progress: section {last + 1} of {total} ({pct}%)")
+                choice = clean_input("  [y] Resume  [n] Start over  [r] Different chapter: ").lower()
+                if choice == 'y':
+                    start_chunk = last + 1
+                elif choice == 'r':
+                    chapter = select_chapter(chapters, pdf_path=pdf_path)
+                    if not chapter:
+                        print("Cancelled.")
+                        return 0
+                    chapter_idx = next((i for i, ch in enumerate(chapters) if ch['num'] == chapter['num']), 0)
+                    start_chunk = 0
+                    # Re-extract text for the new chapter
+                    print(f"\n📄 Extracting text from {chapter['title']}...")
+                    text = extract_pdf_text(pdf_path, chapter['start_page'], chapter['end_page'])
+                    text = preprocess_text(text)
+
             # Stream and play with visualization
             try:
                 result = stream_and_play(text, voice, speed, chapter['title'],
-                                        controls, chapters, chapter_idx, buffer_size)
+                                        controls, chapters, chapter_idx, buffer_size,
+                                        start_chunk=start_chunk, pdf_path=pdf_path)
             except Exception as e:
                 print(f"❌ Playback failed: {e}")
                 return 1
