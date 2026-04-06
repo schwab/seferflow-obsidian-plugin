@@ -1,8 +1,11 @@
-# SeferFlow - Terminal-Based PDF Audiobook Player
+# SeferFlow - PDF Audiobook Platform
 
-A Python terminal application that converts PDF books into natural-sounding audiobooks using neural text-to-speech (TTS). Stream chapters with real-time buffer visualization, multiple voice options, and adjustable playback speed.
+A complete platform for converting PDF books into natural-sounding audiobooks using neural text-to-speech (TTS). Available as a terminal application, REST API service, and Obsidian plugin.
 
-**Status**: ✅ Production Ready (v1.4)
+**Status**: ✅ Production Ready
+- Terminal Player: v1.4 (Interactive mode with live visualization)
+- Web API: v1.0 (Multi-user, authenticated, scalable)
+- Obsidian Plugin: v1.0 (Native vault integration)
 
 ## Features
 
@@ -21,6 +24,34 @@ A Python terminal application that converts PDF books into natural-sounding audi
 - **Persistent Settings** - Your voice and speed preferences saved automatically
 - **Clean Text Menus** - Simple, intuitive navigation
 - **No Terminal Crashes** - Stable ANSI display, no raw tty mode hacks
+
+### 🌐 Web API (v1.0) - Multi-User Service
+- **REST API** - OpenAPI/Swagger UI with comprehensive documentation
+- **Authentication** - JWT-based multi-user support with free/premium tiers
+- **PDF Operations** - Browse library, extract chapters, detect structure
+- **TTS Generation** - Voice synthesis with configurable speakers and speeds
+- **Playback Sessions** - Stateful session management with persistence
+- **MCP Integration** - Inject messages during playback, external control
+- **Progress Tracking** - Resume playback, bookmark positions, history
+- **Rate Limiting** - Per-user quota enforcement
+- **Docker Ready** - Containerized deployment with docker-compose
+- **Scalable Architecture** - Background workers for TTS generation
+
+**API Endpoints**: 25+ endpoints covering authentication, PDF management, TTS, playback, progress, and system health.
+
+**Deployment**: See [seferflow-api/README.md](seferflow-api/README.md) for complete API documentation and Docker setup.
+
+### 📱 Obsidian Plugin (v1.0)
+- **Vault Integration** - Create playlists from vault notes and PDF files
+- **Authentication** - JWT tokens with free tier auto-signup
+- **Usage Tracking** - Free tier (4 hrs/month) vs Premium (unlimited)
+- **Voice Selection** - 4 professional neural voices
+- **Speed Control** - Playback speeds 0.8x - 1.5x
+- **Player Controls** - Play/pause, seek, volume adjustment
+- **Chapter Navigation** - Jump between sections
+- **Progress Persistence** - Resume from last position
+
+**Installation**: See [obsidian-plugin/README.md](obsidian-plugin/README.md) for plugin setup and configuration.
 
 ### 🔧 Technical Features
 - **Producer/Consumer Pattern** - Background TTS generation with bounded memory
@@ -156,23 +187,141 @@ For automation and scripting:
   --speed 0.9
 ```
 
+### Web API & Multi-User Service
+
+Deploy SeferFlow as a scalable web service supporting multiple concurrent users:
+
+```bash
+# Option 1: Quick start with Docker Compose
+cd seferflow-api
+docker-compose up -d
+
+# Option 2: Manual Python installation
+pip install -r seferflow-api/requirements.txt
+python -m uvicorn seferflow_api.main:app --host 0.0.0.0 --port 8000
+
+# Access API
+# Swagger UI:    http://localhost:8000/docs
+# ReDoc:         http://localhost:8000/redoc
+# Health check:  http://localhost:8000/api/v1/health
+```
+
+**API Features**:
+- User registration and JWT authentication
+- Browse PDF libraries and list chapters
+- Generate TTS audio with voice/speed options
+- Manage playback sessions
+- Track progress across devices
+- Inject MCP messages during playback
+
+**Example**: List chapters from API
+
+```bash
+# Register
+curl -X POST http://localhost:8000/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "password": "secure_password"
+  }'
+
+# Login
+TOKEN=$(curl -X POST http://localhost:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "password": "secure_password"
+  }' | jq -r '.access_token')
+
+# List chapters
+curl http://localhost:8000/api/v1/pdfs/library/book.pdf/chapters \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+See [seferflow-api/README.md](seferflow-api/README.md) for complete API documentation.
+
+### Obsidian Plugin
+
+Create audiobook playlists directly in your Obsidian vault:
+
+```bash
+# Install plugin from Obsidian Community Plugins browser
+# Or clone into your plugins directory:
+git clone https://github.com/YOUR_USERNAME/seferflow-obsidian-plugin \
+  ~/.obsidian/plugins/seferflow
+```
+
+**Features**:
+- Automatic vault scanning for PDFs and markdown notes
+- Playlist creation and management
+- Free tier (4 hours/month) and premium subscriptions
+- One-click playback with synchronized scrolling
+- Resume from last position across devices
+
+See [obsidian-plugin/README.md](obsidian-plugin/README.md) for plugin setup and configuration.
+
 ## Architecture
+
+### Platform Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                 SeferFlow Platform                          │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  Terminal Player      Web API            Obsidian Plugin   │
+│  ────────────────     ────────           ──────────────     │
+│  seferflow.py         FastAPI            JavaScript/TS      │
+│  Interactive UI       REST/JSON          Vault Integration  │
+│  Local playback       Multi-user         Free tier (4h/mo)  │
+│  Offline ready        Authenticated      Premium support    │
+│                       Docker deploy      Built-in player    │
+│                                                              │
+├─────────────────────────────────────────────────────────────┤
+│           Core Engine (seferflow.py - all modes)            │
+│                                                              │
+│  • PDF text extraction  • TTS synthesis  • Audio playback   │
+│  • Progress persistence • MCP support    • Multi-voice      │
+│                                                              │
+├─────────────────────────────────────────────────────────────┤
+│              External Services (API mode)                   │
+│                                                              │
+│  PostgreSQL (persistence) | Redis (sessions)               │
+│  Edge-TTS (voices)        | GPU workers (optional)          │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ### Directory Structure
 
 ```
 seferflow/
-├── seferflow              # Main wrapper script
-├── seferflow.py    # Interactive mode (21KB)
-├── seferflow_batch.py           # Batch mode (20KB)
-├── verify_book_reader.sh    # Setup verification
+├── seferflow.py              # Core engine (terminal + API mode)
+├── seferflow_batch.py        # Batch processing mode
+├── seferflow-api/            # FastAPI web service
+│   ├── main.py              # API endpoints
+│   ├── requirements.txt      # Python dependencies
+│   ├── Dockerfile           # Container image
+│   ├── docker-compose.yml   # Full stack setup
+│   └── README.md            # API documentation
+├── obsidian-plugin/         # Obsidian.md plugin
+│   ├── src/                 # TypeScript source
+│   ├── api/                 # API client
+│   ├── manifest.json        # Plugin metadata
+│   ├── styles.css           # Plugin styling
+│   └── README.md            # Plugin documentation
+├── docs/                     # Documentation
+│   ├── seferflow-api-reference.md
+│   ├── JWT_AUTHENTICATION.md
+│   ├── API_USAGE_TRACKING.md
+│   └── ...
+├── tests/                    # API test suite
+│   ├── test_api_*.py        # Endpoint tests
+│   ├── test_mcp_*.py        # MCP integration tests
+│   └── TESTING.md           # Test documentation
 ├── README.md                # This file
 ├── CHANGELOG.md             # Version history
-├── LICENSE                  # MIT License
-└── docs/
-    ├── FEATURES.md          # Detailed feature guide
-    ├── ARCHITECTURE.md      # Technical design
-    └── TROUBLESHOOTING.md   # Help & FAQ
+└── LICENSE                  # MIT License
 ```
 
 ### Design Patterns
@@ -303,35 +452,65 @@ mypy book_reader*.py
 
 ## Version History
 
-- **v1.3** (Apr 2025) - Live visualization, fixed settings menu
-- **v1.2** (Apr 2025) - Streaming TTS, voice selection, smooth audio
-- **v1.1** (Apr 2025) - Directory navigation, arrow key handling
-- **v1.0** (Apr 2025) - Initial release
+**Platform Versions:**
+- **Terminal Player v1.4** (Apr 2026) - MCP interruption, hierarchical progress markers
+- **Web API v1.0** (Apr 2026) - Multi-user REST API with authentication, PostgreSQL persistence
+- **Obsidian Plugin v1.0** (Apr 2026) - Vault integration with free/premium tiers
+
+**Terminal Player Changelog:**
+- **v1.4** (Apr 2025) - Live visualization, fixed settings menu
+- **v1.3** (Apr 2025) - Streaming TTS, voice selection, smooth audio
+- **v1.2** (Apr 2025) - Directory navigation, arrow key handling
+- **v1.1** (Apr 2025) - Initial release
 
 See `CHANGELOG.md` for detailed changes.
 
 ## Roadmap
 
-### Current Release (v1.3)
+### Current Release (v1.4 - Apr 2026)
+
+**Terminal Player:**
 - ✅ Streaming TTS generation
 - ✅ Live buffer/progress visualization
 - ✅ Multiple voice options
 - ✅ Speed adjustment
 - ✅ Stable playback
+- ✅ Pause/resume with position saving
+- ✅ Seek forward/backward
+- ✅ MCP message injection support
+- ✅ Hierarchical progress markers
 
-### Planned (v1.4)
-- [ ] Pause/resume playback
-- [ ] Skip forward/backward
-- [ ] Save playback position
-- [ ] Chapter bookmarks
-- [ ] Local Kokoro-ONNX support (offline)
+**Web API (v1.0):**
+- ✅ REST API with OpenAPI documentation
+- ✅ JWT-based multi-user authentication
+- ✅ Free tier (4 hrs/month) and premium support
+- ✅ PDF browsing and chapter extraction
+- ✅ TTS generation endpoints
+- ✅ Playback session management
+- ✅ Progress tracking and resumption
+- ✅ Docker and docker-compose deployment
+- ✅ Redis session storage
+- ✅ PostgreSQL persistence
+- ✅ MCP integration for message injection
 
-### Future (v2.0)
-- [ ] Web UI (Flask/React)
+**Obsidian Plugin (v1.0):**
+- ✅ Vault note and PDF scanning
+- ✅ Playlist creation and management
+- ✅ Voice and speed selection
+- ✅ JWT authentication with auto-signup
+- ✅ Usage tracking for free tier
+- ✅ Built-in player with full controls
+
+### Planned (v2.0)
+- [ ] Web dashboard (React UI)
+- [ ] Mobile native apps (iOS/Android)
+- [ ] Offline TTS (Kokoro-ONNX local models)
+- [ ] Cloud sync and backup
+- [ ] Advanced search and filtering
 - [ ] Audio file library management
 - [ ] Integration with Whisper (auto-transcription)
 - [ ] Sync with e-readers (Kindle)
-- [ ] Mobile companion app
+- [ ] Custom voice training
 
 ## Contributing
 
