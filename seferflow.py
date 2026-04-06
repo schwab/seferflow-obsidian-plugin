@@ -202,24 +202,22 @@ def file_progress_status(pdf_path: str) -> str:
     if not chapters_data:
         return "none"
 
-    # Check if any chapter is partial
-    for ch_data in chapters_data.values():
-        last = ch_data.get("last_chunk", 0)
-        total = ch_data.get("total_chunks", 1)
-        if 0 < last < total - 1:
-            return "partial"
-
-    # If we get here, all entries are either new or complete
-    # Check if all are complete
+    # Check if all chapters are complete
     all_complete = True
     for ch_data in chapters_data.values():
         last = ch_data.get("last_chunk", 0)
         total = ch_data.get("total_chunks", 1)
-        if last + 1 < total:
+        if last + 1 < total:  # Not complete
             all_complete = False
             break
 
-    return "complete" if all_complete else "partial"
+    # If all complete, return complete
+    if all_complete:
+        return "complete"
+
+    # If any chapter has progress (started but not complete), it's partial
+    # A chapter is "new" only if there's no entry for it
+    return "partial"
 
 
 def clear_screen():
@@ -298,7 +296,13 @@ def browse_books(start_dir: str = "/home/mcstar/Nextcloud/Vault/books") -> Optio
             abs_num = page * page_size + i + 1
             if item_type == 'pdf':
                 status = file_progress_status(full_path)
-                marker = {'none': ' ', 'partial': '~', 'complete': '✅'}[status]
+                # Use colors and emojis for markers
+                if status == 'complete':
+                    marker = "✅"
+                elif status == 'partial':
+                    marker = YELLOW + "~" + RESET
+                else:
+                    marker = " "
                 print(f"  {abs_num:2d}. {marker} {display_name}")
             else:
                 print(f"  {abs_num:2d}.   {display_name}")
