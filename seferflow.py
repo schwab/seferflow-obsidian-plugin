@@ -709,12 +709,19 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
 
             samples, sr = item
             state.chunks_played += 1
+            chunk_duration = len(samples) / sr
+
+            # DEBUG: Log when each chunk starts playing
+            print(f"\n[PLAY] Chunk {state.chunks_played}: duration={chunk_duration:.1f}s, samples={len(samples)}, sr={sr}", file=sys.stderr)
+            sys.stderr.flush()
 
             try:
                 # Play this single chunk directly (no concatenation)
                 play_audio_with_display(samples, sr, state,
                                        chapter_name, voice.split('-')[1][:4], speed,
                                        controls)
+                print(f"[PLAY] Chunk {state.chunks_played}: finished", file=sys.stderr)
+                sys.stderr.flush()
             except ChapterChangeRequest as e:
                 chapter_result = e.direction
                 break
