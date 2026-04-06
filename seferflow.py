@@ -684,90 +684,67 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
         # Start playback
         sd.play(samples, sample_rate, latency='low')
         state.play_start_time = time.time()
-        display_stop = threading.Event()
 
-        def _display_loop(live):
-            """Update display every 250ms with current playback state."""
-            while not display_stop.is_set():
-                panel = _build_display(state, chapter_name, voice_short, speed,
-                                      _current_offset(), len(samples), sample_rate)
-                live.update(panel)
-                time.sleep(0.25)
-
-        # Use Rich Live display if available
-        if RICH_AVAILABLE and _console:
-            panel = _build_display(state, chapter_name, voice_short, speed,
-                                  _current_offset(), len(samples), sample_rate)
-            with Live(panel, console=_console, refresh_per_second=4, transient=False) as live:
-                display_thread = threading.Thread(target=_display_loop, args=(live,), daemon=True)
-                display_thread.start()
-
-                try:
-                    # Polling loop with low frequency (50ms) to check for user commands
-                    while sd.get_stream().active if hasattr(sd.get_stream(), 'active') else True:
-                        # Check for keyboard commands
-                        try:
-                            cmd = controls.cmd_queue.get_nowait()
-                            if cmd == 'seek_forward':
-                                _restart_from(_current_offset() + SEEK_FORWARD_SAMPLES)
-                            elif cmd == 'seek_backward':
-                                _restart_from(_current_offset() - SEEK_BACKWARD_SAMPLES)
-                            elif cmd in ('next_chapter', 'prev_chapter', 'quit'):
-                                sd.stop()
-                                raise ChapterChangeRequest(cmd)
-                        except queue.Empty:
-                            pass
-
-                        # Handle pause/resume
-                        if controls.paused.is_set() and not state.paused:
-                            state.elapsed_before_pause += time.time() - state.play_start_time
-                            state.paused = True
-                            sd.stop()
-                        elif not controls.paused.is_set() and state.paused:
-                            state.paused = False
-                            state.play_start_time = time.time()
-                            current = _current_offset()
-                            if current < len(samples):
-                                sd.play(samples[current:], sample_rate, latency='low')
-
-                        time.sleep(0.05)  # 50ms poll for responsive controls
-
-                    # Wait for natural end of playback
-                    sd.wait()
-
-                finally:
-                    display_stop.set()
-                    display_thread.join(timeout=1.0)
-        else:
-            # Fallback: no display, but still support keyboard controls
+        def _is_playing() -> bool:
+            """Check if sounddevice stream is active without raising on ended streams."""
             try:
-                while sd.get_stream().active if hasattr(sd.get_stream(), 'active') else True:
-                    try:
-                        cmd = controls.cmd_queue.get_nowait()
-                        if cmd == 'seek_forward':
-                            _restart_from(_current_offset() + SEEK_FORWARD_SAMPLES)
-                        elif cmd == 'seek_backward':
-                            _restart_from(_current_offset() - SEEK_BACKWARD_SAMPLES)
-                        elif cmd in ('next_chapter', 'prev_chapter', 'quit'):
-                            sd.stop()
-                            raise ChapterChangeRequest(cmd)
-                    except queue.Empty:
-                        pass
+                return sd.get_stream().active
+            except Exception:
+                return False
 
-                    if controls.paused.is_set() and not state.paused:
-                        state.elapsed_before_pause += time.time() - state.play_start_time
-                        state.paused = True
-                        sd.stop()
-                    elif not controls.paused.is_set() and state.paused:
-                        state.paused = False
-                        state.play_start_time = time.time()
-                        current = _current_offset()
-                        if current < len(samples):
-                            sd.play(samples[current:], sample_rate, latency='low')
+        def _poll_controls():
+            """Process one round of keyboard commands and pause/resume. Returns True to continue, False to stop."""
+            nonlocal sample_offset
+            try:
+                cmd = controls.cmd_queue.get_nowait()
+                if cmd == 'seek_forward':
+                    _restart_from(_current_offset() + SEEK_FORWARD_SAMPLES)
+                elif cmd == 'seek_backward':
+                    _restart_from(_current_offset() - SEEK_BACKWARD_SAMPLES)
+                elif cmd in ('next_chapter', 'prev_chapter', 'quit'):
+                    sd.stop()
+                    raise ChapterChangeRequest(cmd)
+            except queue.Empty:
+                pass
 
+            if controls.paused.is_set() and not state.paused:
+                state.elapsed_before_pause += time.time() - state.play_start_time
+                state.paused = True
+                sd.stop()
+            elif not controls.paused.is_set() and state.paused:
+                state.paused = False
+                state.play_start_time = time.time()
+                current = _current_offset()
+                if current < len(samples):
+                    sd.play(samples[current:], sample_rate, latency='low')
+
+        if RICH_AVAILABLE and _console:
+            # Single polling loop — no separate display thread to avoid GIL contention.
+            # Display updates are rate-limited to 4 Hz inside the same loop.
+            panel = _build_display(state, chapter_name, voice_short, speed,
+                                   _current_offset(), len(samples), sample_rate)
+            last_display_update = 0.0
+            with Live(panel, console=_console, auto_refresh=False, transient=True) as live:
+                try:
+                    while _is_playing() or state.paused:
+                        _poll_controls()
+
+                        now = time.time()
+                        if now - last_display_update >= 0.25:
+                            live.update(_build_display(state, chapter_name, voice_short, speed,
+                                                       _current_offset(), len(samples), sample_rate))
+                            live.refresh()
+                            last_display_update = now
+
+                        time.sleep(0.05)
+                except ChapterChangeRequest:
+                    raise
+        else:
+            # No Rich: plain polling loop, keyboard controls still work
+            try:
+                while _is_playing() or state.paused:
+                    _poll_controls()
                     time.sleep(0.05)
-
-                sd.wait()
             except KeyboardInterrupt:
                 sd.stop()
                 raise ChapterChangeRequest('quit')
