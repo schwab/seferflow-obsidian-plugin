@@ -847,20 +847,21 @@ def _render_display(state: PlaybackState, chapter_name: str, voice_short: str, s
     # Section progress
     section_str = f"📚 Section {state.chunks_played} of {state.total_chunks}"
     time_str = f"⏱️  {fmt_time(elapsed)} / ~{fmt_time(total_est)}"
-    lines.append(f"  {section_str:<37} {time_str:>30}")
+    lines.append(f"  {section_str:<35} {time_str:>32}")
     lines.append("")  # blank
 
-    # Progress bar (████████░░░░)
-    bar_width = WIDTH - 14
+    # Progress bar (████████░░░░) with colors
+    bar_width = WIDTH - 20
     filled = int(bar_width * state.chunks_played / max(state.total_chunks, 1))
-    bar = "▓" * filled + "░" * (bar_width - filled)
+    bar = GREEN + "▓" * filled + RESET + "░" * (bar_width - filled) + RESET
     lines.append(f"  📊 Progress:  {bar}  {pct:3d}%")
     lines.append("")  # blank
 
-    # Buffer bar
-    buf_width = 15
+    # Buffer bar with colors (buffered=in queue waiting to play, empty=need to generate)
+    buf_width = 12
     buf_filled = min(buffered, state.queue_max)
-    buf_bar = "▓" * buf_filled + "░" * (state.queue_max - buf_filled)
+    buf_bar = (YELLOW + "▓" * buf_filled + RESET +
+               DARK_GRAY + "░" * (state.queue_max - buf_filled) + RESET)
     gen_status = "⟳ generating..." if state.generating else "✅ ready"
     lines.append(f"  📦 Buffer:    [{buf_bar}]  {buffered}/{state.queue_max}  {gen_status}")
     lines.append("")  # blank
@@ -1061,7 +1062,9 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
 
     # Create shared state
     # queue_max must match the actual audio_queue maxsize for accurate buffer display
-    state = PlaybackState(total_chunks=total_chunks, queue_max=buffer_size, chunks_played=start_chunk)
+    # When resuming from start_chunk, initialize both played and generated to that position
+    state = PlaybackState(total_chunks=total_chunks, queue_max=buffer_size,
+                         chunks_played=start_chunk, chunks_generated=start_chunk)
 
     print(f"\n📚 {chapter_name}")
     print(f"   {total_chunks} sections to generate and play")
