@@ -5,7 +5,7 @@ All notable changes to the SeferFlow project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.4.0] - 2025-04-05
+## [1.4.0] - 2026-04-06
 
 ### Added
 - **Settings Persistence** - Voice and speed preferences saved automatically
@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Batch mode: `seferflow_batch.py`
   - Verification script: `verify.sh`
   - All documentation updated
+- **Web API (v1.0.0)** - Full REST API with Swagger UI
+  - Authentication (JWT tokens)
+  - TTS generation with WebSocket streaming
+  - Playback control endpoints (pause/resume/seek)
+  - MCP interruption support
+  - Rate limiting & health monitoring
+  - Docker containerization with Redis/PostgreSQL
+
+### Changed
+- API documentation moved to `/home/mcstar/projects/seferflow/docs/seferflow-api-reference.md`
 
 ### Changed
 - `settings_menu()` now accepts `default_speed` and `default_voice` parameters

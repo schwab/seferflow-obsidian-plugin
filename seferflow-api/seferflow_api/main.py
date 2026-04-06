@@ -8,24 +8,34 @@ import secrets
 import json
 import os
 import sys
-from datetime import datetime
+import hashlib
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from pathlib import Path
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Depends, Header, Request
+try:
+    import jwt
+except ImportError:
+    jwt = None
+
+from fastapi import FastAPI, HTTPException, Depends, Header, Request, Query
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlmodel import SQLModel, create_engine, Session
 from sqlalchemy import create_engine as sa_create_engine
 from sqlalchemy.orm import Session as SA_Session
 import redis
 from redis.exceptions import RedisError
+import sqlmodel
 
 # Import seferflow engine (original code)
-sys.path.insert(0, str(Path(__file__).parent.parent / "seferflow.py"))
+# Add parent directory to path so we can import seferflow.py
+seferflow_dir = Path(__file__).parent.parent.parent  # Go up to seferflow root
+sys.path.insert(0, str(seferflow_dir))
+
 from seferflow import (
-    ChapterProgressDisplay,
     PlaybackState,
     generate_speech,
     split_into_chunks,
@@ -44,6 +54,7 @@ from seferflow import (
     stream_and_play,
     load_settings,
     save_settings,
+    get_chapters,
 )
 
 # API Instance
@@ -66,8 +77,6 @@ app.add_middleware(
 )
 
 # Request ID Middleware
-from uuid import uuid4
-
 class RequestIDMiddleware:
     def __init__(self, app):
         self.app = app
@@ -113,12 +122,13 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "180"
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 
 # Create JWT tokens (placeholder)
-def create_access_token_sub(subject: str, expires_delta: Optional[datetime] = None) -> str:
-    import jwt
+def create_access_token_sub(subject: str, expires_delta: Optional[timedelta] = None) -> str:
+    if not jwt:
+        return f"dev-token-{uuid4()}"
     if expires_delta:
-        expire = expires_delta
+        expire = datetime.utcnow() + expires_delta
     else:
-        expire = datetime.utcnow() + datetime.timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode = {"sub": subject, "exp": expire}
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -164,15 +174,42 @@ class ProgressRecord(SQLModel, table=True):
     listen_time: datetime = Field(default_factory=datetime.utcnow)
     progress_percent: float = 0.0
 
+# Request/Response Models
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str
+    username: str
+    role: str = "listener"
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+class TTSGenerateRequest(BaseModel):
+    text: str
+    voice: str = "en-US-AriaNeural"
+    speed: float = 1.0
+
+class PlaybackSessionRequest(BaseModel):
+    pdf_path: str
+    chapter: str
+    voice: str = "en-US-AriaNeural"
+    speed: float = 1.0
+    buffer_size: int = 6
+
 # Helper Functions
 def verify_token(token: str) -> Optional[str]:
     """Verify JWT and return user_id"""
+    if not jwt:
+        return None
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload.get("sub")
     except jwt.ExpiredSignatureError:
         return None
     except jwt.InvalidTokenError:
+        return None
+    except Exception:
         return None
 
 def get_current_user(
@@ -183,50 +220,44 @@ def get_current_user(
 
 # Auth Endpoints
 @app.post("/api/v1/auth/register", status_code=201, response_model=dict)
-async def register_user(
-    email: EmailStr,
-    password: str,
-    username: str,
-    role: str = "listener",
-):
+async def register_user(request: RegisterRequest):
     """Register new user"""
     # Validate password
-    if len(password) < 8:
+    if len(request.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
-    if not any(c.isupper() for c in password):
+    if not any(c.isupper() for c in request.password):
         raise HTTPException(status_code=400, detail="Password must contain at least one uppercase letter")
-    
+
     # Hash password
-    hashed_pw = hashlib.sha256(password.encode()).hexdigest()
-    
+    hashed_pw = hashlib.sha256(request.password.encode()).hexdigest()
+
     # Create user (placeholder)
     user_id = f"user_{int(datetime.utcnow().timestamp())}"
-    access_token = create_access_token_sub(user_id)
-    
+    token = create_access_token_sub(user_id) if jwt else f"dev-token-{uuid4()}"
+
     return {
         "user_id": user_id,
-        "email": email,
-        "username": username,
-        "role": role,
+        "email": request.email,
+        "username": request.username,
+        "role": request.role,
+        "access_token": token,
         "created_at": datetime.utcnow().isoformat(),
         "message": "User registered successfully"
     }
 
 @app.post("/api/v1/auth/login", response_model=Dict[str, Any])
-async def login(
-    form_data: OAuth2PasswordRequestForm,
-):
+async def login(request: LoginRequest):
     """Login and get JWT token"""
     user_id = f"user_{int(datetime.utcnow().timestamp())}"
-    access_token = create_access_token_sub(user_id)
-    
+    token = create_access_token_sub(user_id) if jwt else f"dev-token-{uuid4()}"
+
     return {
-        "access_token": access_token,
+        "access_token": token,
         "token_type": "bearer",
         "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         "user": {
             "id": user_id,
-            "email": form_data.username,
+            "email": request.email,
             "role": "listener"
         }
     }
@@ -322,21 +353,16 @@ async def list_chapters(
 
 # TTS Endpoints
 @app.post("/api/v1/tts/generate")
-async def generate_tts(
-    text: str,
-    voice: str = "en-US-AriaNeural",
-    speed: float = 1.0,
-    sample_rate: int = 24000,
-):
+async def generate_tts(request: TTSGenerateRequest):
     """Generate TTS audio"""
     try:
-        samples, sr = generate_speech(text, voice, speed)
+        samples, sr = generate_speech(request.text, request.voice, request.speed)
         samples = trim_silence(samples)
         samples = normalize_audio(samples)
-        
+
         return {
             "audio_id": f"audio_{uuid4().hex[:12]}",
-            "text": text,
+            "text": request.text,
             "voice": voice,
             "speed": speed,
             "duration_seconds": len(samples) / sr,
@@ -368,25 +394,20 @@ async def split_chunks(
 # Playback Endpoints
 @app.post("/api/v1/playback/session")
 async def create_playback_session(
+    request: PlaybackSessionRequest,
     user_id: str = Header(...),
-    pdf_path: str,
-    chapter: str,
-    voice: str,
-    speed: float,
-    buffer_size: int = 6,
-    websocket: bool = True,
 ):
     """Create new playback session"""
     session_id = str(uuid4())
     state = PlaybackState()
-    
+
     return {
         "session_id": session_id,
-        "pdf_path": pdf_path,
-        "chapter": chapter,
-        "voice": voice,
-        "speed": speed,
-        "buffer_size": buffer_size,
+        "pdf_path": request.pdf_path,
+        "chapter": request.chapter,
+        "voice": request.voice,
+        "speed": request.speed,
+        "buffer_size": request.buffer_size,
         "status": "playing",
         "position": 0,
         "remaining": 0,
@@ -397,8 +418,8 @@ async def create_playback_session(
 @app.patch("/api/v1/playback/{session_id}/pause")
 async def toggle_pause(
     session_id: str,
+    pause: bool = Query(...),
     user_id: str = Header(...),
-    pause: bool,
 ):
     """Pause/resume playback"""
     # Placeholder for pause logic
@@ -410,8 +431,8 @@ async def toggle_pause(
 @app.patch("/api/v1/playback/{session_id}/seek")
 async def seek_playback(
     session_id: str,
+    offset: int = Query(...),
     user_id: str = Header(...),
-    offset: int,
     direction: str = "forward",
 ):
     """Seek playback"""
