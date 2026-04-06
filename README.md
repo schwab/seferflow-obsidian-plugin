@@ -55,6 +55,9 @@ An Obsidian plugin that integrates with the SeferFlow API to create intelligent 
 git clone https://github.com/schwab/seferflow-obsidian-plugin.git
 cd seferflow-obsidian-plugin
 
+# If you want to develop/test locally, install npm dependencies:
+npm install
+
 # Copy to your Obsidian plugins folder
 mkdir -p ~/.config/obsidian/community-plugins
 cp -r seferflow-obsidian-plugin ~/.config/obsidian/community-plugins/

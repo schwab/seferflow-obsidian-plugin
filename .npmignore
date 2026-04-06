@@ -1,0 +1,41 @@
+# Node modules (Obsidian loads these from Obsidian itself)
+node_modules/
+
+# Build artifacts
+build/
+dist/
+
+# Test files
+tests/
+*.test.ts
+*.spec.ts
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Development files
+*.ts
+*.tsx
+src/**/*.ts
+types/**
+
+# IDE settings
+.idea/
+.vscode/
+
+# Git
+.git/
+.gitignore
+
+# OS files
+.DS_Store*
+Thumbs.db
+
+# Logs
+*.log
+
+# Development files
+README.md
+CHANGELOG.md
+CONTRIBUTING.md

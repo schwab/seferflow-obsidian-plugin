@@ -1,0 +1,33 @@
+{
+  "name": "seferflow-obsidian-plugin",
+  "version": "1.0.0",
+  "description": "SeferFlow Obsidian Plugin - Create audiobook playlists directly in your Obsidian vault",
+  "main": "obsidian-plugin/main.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "dev": "tsc && node obsidian-plugin/main.js"
+  },
+  "keywords": [
+    "obsidian",
+    "obsidian-plugin",
+    "tts",
+    "audiobook",
+    "playback"
+  ],
+  "author": "Schwab",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/schwab/seferflow-obsidian-plugin.git"
+  },
+  "devDependencies": {
+    "obsidian": "^1.0.0",
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  },
+  "obsidian": {
+    "minAppVersion": "1.0.0",
+    "isDesktopOnly": false
+  }
+}
