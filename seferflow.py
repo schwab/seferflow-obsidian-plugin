@@ -628,7 +628,8 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
     total_chunks = len(chunks)
 
     # Create shared state
-    state = PlaybackState(total_chunks=total_chunks, queue_max=3)
+    # queue_max must match the actual audio_queue maxsize for accurate buffer display
+    state = PlaybackState(total_chunks=total_chunks, queue_max=10)
 
     print(f"\n📚 {chapter_name}")
     print(f"   {total_chunks} sections to generate and play")
@@ -684,8 +685,11 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
     keyboard_thread.start()
 
     # Pre-buffer chunks before starting playback to avoid starvation from slow edge-tts
+    # CRITICAL: Must pre-buffer enough to handle the 2-chunk concatenation strategy
+    # With ~5s/chunk generation and ~20-40s playback time, we need 8+ chunks buffered
     print("🔄 Pre-buffering audio chunks...")
-    while audio_queue.qsize() < 3 and not stop_event.is_set() and not error_happened[0]:
+    target_buffer = min(8, total_chunks)  # Pre-buffer 8 chunks (or all if chapter is short)
+    while audio_queue.qsize() < target_buffer and not stop_event.is_set() and not error_happened[0]:
         time.sleep(0.1)
     print(f"✓ {audio_queue.qsize()} chunks buffered, starting playback\n")
 
