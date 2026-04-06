@@ -558,8 +558,15 @@ def make_buffer_bar(current: int, max_size: int, width: int = 15) -> str:
     return f"[{bar}]  {filled}/{max_size}"
 
 
-def _build_display(state: PlaybackState, chapter_name: str, voice_short: str, speed: float) -> Panel:
-    """Build a Rich Panel renderable for the player display."""
+def _build_display(state: PlaybackState, chapter_name: str, voice_short: str, speed: float,
+                   current_offset: int = 0, total_samples: int = 0, sample_rate: int = 0) -> Panel:
+    """Build a Rich Panel renderable for the player display.
+
+    Args:
+        current_offset: Current playback position in samples (for per-chunk display)
+        total_samples: Total samples in current chunk (for per-chunk display)
+        sample_rate: Sample rate in Hz (for per-chunk display)
+    """
     if not RICH_AVAILABLE:
         # Fallback: just return empty text if Rich not available
         return Text("Playback in progress...")
@@ -576,7 +583,7 @@ def _build_display(state: PlaybackState, chapter_name: str, voice_short: str, sp
     chapter_short = chapter_name[:40]
     header_line = f"{chapter_short:<40} {speed:>4.1f}x  {voice_short}"
 
-    # Time information
+    # Time information - both overall progress and per-chunk
     if state.paused:
         elapsed = state.elapsed_before_pause
     else:
@@ -588,6 +595,15 @@ def _build_display(state: PlaybackState, chapter_name: str, voice_short: str, sp
     else:
         remaining = 0
     total_est = elapsed + remaining
+
+    # Per-chunk progress
+    if total_samples > 0 and sample_rate > 0:
+        chunk_elapsed = current_offset / sample_rate
+        chunk_total = total_samples / sample_rate
+        chunk_progress = make_progress_bar(1, int(current_offset), 0)
+        chunk_line = f"Chunk:     {chunk_progress}  {fmt_time(chunk_elapsed)} / {fmt_time(chunk_total)}"
+    else:
+        chunk_line = ""
 
     time_str = f"{fmt_time(elapsed)} / ~{fmt_time(total_est)}"
     section_str = f"Section {state.chunks_played + 1} of {state.total_chunks}"
@@ -609,6 +625,8 @@ def _build_display(state: PlaybackState, chapter_name: str, voice_short: str, sp
     content = Text()
     content.append(header_line + "\n\n", style="dim")
     content.append(time_line + "\n", style="dim")
+    if chunk_line:
+        content.append(chunk_line + "\n", style="dim")
     content.append(f"Progress:  {progress_bar_str}\n", style="dim")
     content.append(buffer_line + "\n\n", style="dim")
     content.append(instructions, style="dim")
@@ -623,6 +641,9 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
 
     Implements pause/resume, seek ±5s, and chapter navigation. Uses Rich Live display
     and polling loop for real-time responsiveness to user input.
+
+    With proper sentence reconstruction, GIL contention is minimal, so we can safely
+    display updates at low frequency (4 Hz) without audio stuttering.
     """
     samples = normalize_audio(samples)
     sample_offset = 0
@@ -656,20 +677,96 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
             os.unlink(temp_wav)
             return
 
-        # CRITICAL: Audio playback must NOT have any terminal I/O in the playback path
-        # Display updates cause GIL contention and create pauses every 50ms
-        # Solution: Just play audio with sd.wait(), no polling loop, no display updates during playback
-
+        # Start playback
         sd.play(samples, sample_rate, latency='low')
         state.play_start_time = time.time()
+        display_stop = threading.Event()
 
-        try:
-            # Block until playback finishes
-            # No terminal I/O here - this is pure audio, no GIL contention
-            sd.wait()
-        except KeyboardInterrupt:
-            sd.stop()
-            raise ChapterChangeRequest('quit')
+        def _display_loop(live):
+            """Update display every 250ms with current playback state."""
+            while not display_stop.is_set():
+                panel = _build_display(state, chapter_name, voice_short, speed,
+                                      _current_offset(), len(samples), sample_rate)
+                live.update(panel)
+                time.sleep(0.25)
+
+        # Use Rich Live display if available
+        if RICH_AVAILABLE and _console:
+            panel = _build_display(state, chapter_name, voice_short, speed,
+                                  _current_offset(), len(samples), sample_rate)
+            with Live(panel, console=_console, refresh_per_second=4, transient=False) as live:
+                display_thread = threading.Thread(target=_display_loop, args=(live,), daemon=True)
+                display_thread.start()
+
+                try:
+                    # Polling loop with low frequency (50ms) to check for user commands
+                    while sd.get_stream().active if hasattr(sd.get_stream(), 'active') else True:
+                        # Check for keyboard commands
+                        try:
+                            cmd = controls.cmd_queue.get_nowait()
+                            if cmd == 'seek_forward':
+                                _restart_from(_current_offset() + SEEK_FORWARD_SAMPLES)
+                            elif cmd == 'seek_backward':
+                                _restart_from(_current_offset() - SEEK_BACKWARD_SAMPLES)
+                            elif cmd in ('next_chapter', 'prev_chapter', 'quit'):
+                                sd.stop()
+                                raise ChapterChangeRequest(cmd)
+                        except queue.Empty:
+                            pass
+
+                        # Handle pause/resume
+                        if controls.paused.is_set() and not state.paused:
+                            state.elapsed_before_pause += time.time() - state.play_start_time
+                            state.paused = True
+                            sd.stop()
+                        elif not controls.paused.is_set() and state.paused:
+                            state.paused = False
+                            state.play_start_time = time.time()
+                            current = _current_offset()
+                            if current < len(samples):
+                                sd.play(samples[current:], sample_rate, latency='low')
+
+                        time.sleep(0.05)  # 50ms poll for responsive controls
+
+                    # Wait for natural end of playback
+                    sd.wait()
+
+                finally:
+                    display_stop.set()
+                    display_thread.join(timeout=1.0)
+        else:
+            # Fallback: no display, but still support keyboard controls
+            try:
+                while sd.get_stream().active if hasattr(sd.get_stream(), 'active') else True:
+                    try:
+                        cmd = controls.cmd_queue.get_nowait()
+                        if cmd == 'seek_forward':
+                            _restart_from(_current_offset() + SEEK_FORWARD_SAMPLES)
+                        elif cmd == 'seek_backward':
+                            _restart_from(_current_offset() - SEEK_BACKWARD_SAMPLES)
+                        elif cmd in ('next_chapter', 'prev_chapter', 'quit'):
+                            sd.stop()
+                            raise ChapterChangeRequest(cmd)
+                    except queue.Empty:
+                        pass
+
+                    if controls.paused.is_set() and not state.paused:
+                        state.elapsed_before_pause += time.time() - state.play_start_time
+                        state.paused = True
+                        sd.stop()
+                    elif not controls.paused.is_set() and state.paused:
+                        state.paused = False
+                        state.play_start_time = time.time()
+                        current = _current_offset()
+                        if current < len(samples):
+                            sd.play(samples[current:], sample_rate, latency='low')
+
+                    time.sleep(0.05)
+
+                sd.wait()
+            except KeyboardInterrupt:
+                sd.stop()
+                raise ChapterChangeRequest('quit')
 
     except ChapterChangeRequest:
         raise  # Re-raise to be caught by stream_and_play()
@@ -728,7 +825,7 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
 
     # Create shared state
     # queue_max must match the actual audio_queue maxsize for accurate buffer display
-    state = PlaybackState(total_chunks=total_chunks, queue_max=10)
+    state = PlaybackState(total_chunks=total_chunks, queue_max=6)
 
     print(f"\n📚 {chapter_name}")
     print(f"   {total_chunks} sections to generate and play")
@@ -736,9 +833,9 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
     print(f"   Controls: [Space] Pause  [←/→] ±5s  [n/p] Chapter  [q] Quit\n")
     time.sleep(1)
 
-    # Use larger queue to handle slow edge-tts chunk delivery (4-6 seconds per chunk)
-    # Keep 8 chunks buffered so gaps in TTS don't starve the audio callback
-    audio_queue = queue.Queue(maxsize=10)
+    # Buffer size reduced now that sentence reconstruction fixes pauses.
+    # With proper sentence boundaries, 3-4 chunks (15-20s of audio) is sufficient
+    audio_queue = queue.Queue(maxsize=6)
     stop_event = threading.Event()
     error_happened = [False]
     chapter_result = 'done'  # Default result
@@ -784,15 +881,13 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
     keyboard_thread.start()
 
     # Pre-buffer minimum chunks before starting playback
-    # Keep startup time reasonable while having some buffer
-    print("🔄 Pre-buffering audio chunks (waiting ~15 seconds)...")
+    print("🔄 Pre-buffering audio chunks...")
     pre_buffer_start = time.time()
-    # Wait ~15 seconds for producer to build some buffer (3-4 chunks at ~5s per chunk)
-    # This provides some safety margin without excessive startup delay
-    while time.time() - pre_buffer_start < 15 and not stop_event.is_set() and not error_happened[0]:
-        time.sleep(0.2)
+    # Wait for 2-3 chunks (~10-15 seconds at 5s per chunk)
+    while audio_queue.qsize() < 2 and not stop_event.is_set() and not error_happened[0]:
+        time.sleep(0.1)
     pre_buffer_time = time.time() - pre_buffer_start
-    print(f"✓ Pre-buffering complete, starting playback...\n")
+    print(f"✓ Pre-buffering complete ({audio_queue.qsize()} chunks), starting playback...\n")
 
     # Main thread plays chunks as they become available
     # CRITICAL CHANGE: Play single chunks, not concatenated pairs
