@@ -658,13 +658,13 @@ def _render_display(state: PlaybackState, chapter_name: str, voice_short: str, s
     pct = int(100 * state.chunks_played / max(state.total_chunks, 1))
     buffered = state.chunks_generated - state.chunks_played
 
-    # Estimate total time from chunk durations
-    total_estimated = sum(state.chunk_durations) if state.chunk_durations else 0
-    if state.chunks_played < len(state.chunk_durations):
-        remaining = sum(state.chunk_durations[state.chunks_played:])
+    # Estimate total chapter length (fixed, doesn't change as we generate more chunks)
+    # Use average chunk duration × total chunks for stable estimate
+    if state.chunk_durations and len(state.chunk_durations) > 0:
+        avg_chunk_duration = sum(state.chunk_durations) / len(state.chunk_durations)
+        total_est = avg_chunk_duration * state.total_chunks
     else:
-        remaining = 0
-    total_est = elapsed + remaining
+        total_est = 0
 
     # Build the display
     lines = []
