@@ -877,7 +877,7 @@ def _render_display(state: PlaybackState, chapter_name: str, voice_short: str, s
     lines.append(f"  📦 Buffer:    [{buf_bar}]  {buffered}/{state.queue_max}  {gen_status}")
     lines.append("")  # blank
 
-    # Text display box (captions) - show current chunk being read
+    # Text display box (captions) - show current chunk being read with position tracking
     if chunk_text:
         lines.append("  📝 Current Text:")
         lines.append("  " + "┌" + "─" * (WIDTH - 4) + "┐")
@@ -896,12 +896,38 @@ def _render_display(state: PlaybackState, chapter_name: str, voice_short: str, s
         if current_line:
             text_lines.append(current_line.rstrip())
 
-        # Show first 3 lines of text
-        for i, text_line in enumerate(text_lines[:3]):
-            lines.append(f"  │ {text_line:<{text_width}} │")
-        # Fill remaining lines if less than 3
-        for i in range(len(text_lines[:3]), 3):
-            lines.append(f"  │ {'':<{text_width}} │")
+        # Calculate which line we're currently on based on playback position
+        # Estimate: words per minute from chunk duration
+        total_words = len(words)
+        if total_samples > 0 and total_words > 0:
+            chunk_duration = total_samples / sample_rate
+            words_per_second = total_words / max(chunk_duration, 0.1)
+            current_word_idx = int(current_offset / sample_rate * words_per_second)
+            current_word_idx = min(current_word_idx, total_words - 1)
+        else:
+            current_word_idx = 0
+
+        # Find which line contains the current word
+        word_count = 0
+        current_line_idx = 0
+        for i, line in enumerate(text_lines):
+            line_words = len(line.split())
+            if word_count + line_words > current_word_idx:
+                current_line_idx = i
+                break
+            word_count += line_words
+
+        # Show 3 lines starting from current position
+        for i in range(3):
+            line_idx = current_line_idx + i
+            if line_idx < len(text_lines):
+                # Highlight current line (being read now) with arrow
+                if i == 0:
+                    lines.append(f"  │ ▶ {text_lines[line_idx]:<{text_width - 2}} │")
+                else:
+                    lines.append(f"  │   {text_lines[line_idx]:<{text_width - 2}} │")
+            else:
+                lines.append(f"  │ {'':<{text_width}} │")
         lines.append("  " + "└" + "─" * (WIDTH - 4) + "┘")
         lines.append("")  # blank
 
