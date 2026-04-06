@@ -517,60 +517,20 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
             os.unlink(temp_wav)
             return
 
-        # Rich display with live updates
-        if RICH_AVAILABLE:
-            with Live(_build_display(state, chapter_name, voice_short, speed),
-                     console=_console, refresh_per_second=4) as live:
+        # CRITICAL: Audio playback must NOT have any terminal I/O in the playback path
+        # Display updates cause GIL contention and create pauses every 50ms
+        # Solution: Just play audio with sd.wait(), no polling loop, no display updates during playback
 
-                # Start playback
-                sd.play(samples, sample_rate, latency='low')
-                state.play_start_time = time.time()
+        sd.play(samples, sample_rate, latency='low')
+        state.play_start_time = time.time()
 
-                # Main polling loop
-                while True:
-                    # Check for commands from keyboard thread
-                    try:
-                        cmd = controls.cmd_queue.get_nowait()
-                        if cmd == 'seek_forward':
-                            _restart_from(_current_offset() + SEEK_FORWARD_SAMPLES)
-                        elif cmd == 'seek_backward':
-                            _restart_from(_current_offset() - SEEK_BACKWARD_SAMPLES)
-                        elif cmd in ('next_chapter', 'prev_chapter', 'quit'):
-                            sd.stop()
-                            raise ChapterChangeRequest(cmd)
-                    except queue.Empty:
-                        pass
-
-                    # Handle pause/resume
-                    if controls.paused.is_set() and not state.paused:
-                        # Transition to paused
-                        state.elapsed_before_pause += time.time() - state.play_start_time
-                        state.paused = True
-                        sd.stop()
-                    elif not controls.paused.is_set() and state.paused:
-                        # Transition to unpaused
-                        state.paused = False
-                        state.play_start_time = time.time()
-                        offset = _current_offset()
-                        if offset < len(samples):
-                            remaining = samples[offset:]
-                            if len(remaining) > 0:
-                                sd.play(remaining, sample_rate, latency='low')
-                        else:
-                            break  # Past end of audio
-
-                    # Check if playback finished naturally
-                    if not state.paused and not sd.get_stream().active:
-                        break
-
-                    # Update display
-                    live.update(_build_display(state, chapter_name, voice_short, speed))
-
-                    time.sleep(0.05)  # 50ms poll interval
-        else:
-            # Fallback without Rich (just plain playback)
-            sd.play(samples, sample_rate, latency='low')
+        try:
+            # Block until playback finishes
+            # No terminal I/O here - this is pure audio, no GIL contention
             sd.wait()
+        except KeyboardInterrupt:
+            sd.stop()
+            raise ChapterChangeRequest('quit')
 
     except ChapterChangeRequest:
         raise  # Re-raise to be caught by stream_and_play()
