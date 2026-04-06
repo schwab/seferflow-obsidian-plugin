@@ -268,8 +268,67 @@ def extract_pdf_text(pdf_path: str, start_page: int = 1, end_page: Optional[int]
         raise RuntimeError(f"PDF extraction failed: {e}")
 
 
+def reconstruct_sentences(text: str) -> str:
+    """Reconstruct sentences from PDF text with display-induced line breaks.
+
+    PDF text has lines broken for display (fixed column width), not for sentences.
+    This function:
+    1. Joins lines that were broken mid-sentence
+    2. Preserves paragraph breaks
+    3. Returns text with proper sentence structure
+    """
+    lines = text.split('\n')
+    reconstructed = []
+    current_sentence = ""
+
+    for line in lines:
+        line = line.strip()
+
+        # Skip empty lines but mark paragraph breaks
+        if not line:
+            if current_sentence:
+                reconstructed.append(current_sentence)
+                current_sentence = ""
+            reconstructed.append("")  # Preserve paragraph break
+            continue
+
+        # If current_sentence is empty, start new sentence
+        if not current_sentence:
+            current_sentence = line
+        else:
+            # Check if this line continues the previous sentence
+            # If previous line didn't end with sentence-ending punctuation,
+            # or this line starts with lowercase, it's a continuation
+
+            if (not current_sentence.endswith(('.', '!', '?', ':', ';')) or
+                (line and line[0].islower())):
+                # This line continues the sentence - join with space
+                current_sentence += " " + line
+            else:
+                # Previous line ended a sentence - save it and start new
+                reconstructed.append(current_sentence)
+                current_sentence = line
+
+    # Don't forget the last sentence
+    if current_sentence:
+        reconstructed.append(current_sentence)
+
+    # Join with newlines, preserving paragraph breaks
+    return '\n'.join(reconstructed)
+
+
 def preprocess_text(text: str) -> str:
-    """Clean text."""
+    """Clean and reconstruct text from PDF.
+
+    1. Reconstruct sentences from display-induced line breaks
+    2. Remove hyphenation artifacts
+    3. Normalize whitespace
+    4. Expand abbreviations
+    """
+    # First: reconstruct sentences from PDF display breaks
+    text = reconstruct_sentences(text)
+
+    # Then: clean up
     text = re.sub(r'-\n', '', text)
     text = re.sub(r' +', ' ', text)
     text = re.sub(r'\n\s*\n', '\n\n', text)
