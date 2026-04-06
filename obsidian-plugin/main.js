@@ -7,371 +7,202 @@
 const plugin = {
   id: 'seferflow',
   name: 'SeferFlow - Audiobook Player',
-  manifest: require('./manifest.json')
+  manifest: null
 };
 
 // API client instance
 let apiClient = null;
 
-// Plugin container elements
-const container = {
-  playList: null,
-  playerControls: null,
-  settings: null,
-  usageStats: null
-};
-
 /**
- * Plugin activation
+ * Plugin initialization called by Obsidian API
  */
-function activate() {
-  console.log(`[SeferFlow] Activated v1.0.0`);
+function activate(options) {
+  console.log(`[SeferFlow] Plugin activated v1.0.0`);
+  
+  // Get API from Obsidian
+  const app = window.app || window.PluginAPI.app;
   
   // Check if user is logged in
   checkAuthStatus();
   
-  // Create UI components
-  createPlayListComponent();
-  createPlayerControls();
+  // Create UI components and add to sidebar
   createSettingsComponent();
   createUsageStatsComponent();
   
-  // Register API client
-  apiClient = SeferFlowAPIClient();
+  // Initialize API client
+  apiClient = SeferFlowAPIClient(app.vault);
   
-  // Set event listeners
-  setupEventListeners();
+  console.log('[SeferFlow] API client initialized');
 }
 
-/**
- * Plugin deactivation
- */
 function deactivate() {
-  console.log('[SeferFlow] Deactivated');
+  console.log('[SeferFlow] Plugin deactivated');
 }
 
 /**
  * Check authentication status
  */
 function checkAuthStatus() {
-  const token = localStorage.getItem('seferflow_access_token');
-  const user = JSON.parse(localStorage.getItem('seferflow_user') || 'null');
+  // This would be handled by the Obsidian UI, not manual localStorage
+}
+
+/**
+ * Create settings panel
+ */
+function createSettingsComponent() {
+  const container = document.createElement('div');
+  container.id = 'sf-settings-container';
+  container.innerHTML = `
+    <h3>🔐 Account</h3>
+    <div class="sf-settings-form">
+      <button id="sf-login" class="sf-btn">Log In</button>
+      <button id="sf-logout" class="sf-btn sf-btn-outline">Log Out</button>
+      
+      <div id="sf-login-status" class="sf-login-status">
+        Click "Log In" to connect to SeferFlow API
+      </div>
+      
+      <form id="sf-auth-form" style="display:none;">
+        <div class="sf-form-group">
+          <label>Email Address</label>
+          <input type="email" name="email" placeholder="you@example.com" required />
+        </div>
+        <div class="sf-form-group">
+          <label>Password</label>
+          <input type="password" name="password" placeholder="••••••••" required />
+        </div>
+        <button type="submit" id="sf-submit" class="sf-btn">Submit</button>
+      </form>
+    </div>
+    
+    <div class="sf-usage-panel">
+      <h4>📊 Usage Statistics</h4>
+      <div id="sf-usage-stats" class="sf-usage-stats">Not logged in</div>
+    </div>
+  `;
   
-  if (token && user) {
-    // User is logged in
-    displayUsageStats(user);
-  }
+  // Add to Obsidian sidebar
+  app.plugins.sidebar?.registerView('seferflow-settings', {
+    component: container,
+    preserveState: true
+  }, 'settings');
+  
+  // Set up event listeners
+  container.addEventListener('click', handleAuthClick);
+  container.addEventListener('submit', handleLoginForm);
+  
+  // Create play list component
+  createPlayListComponent();
+  
+  console.log('[SeferFlow] Settings panel created');
 }
 
 /**
  * Create play list component
  */
 function createPlayListComponent() {
-  const container = DOM.createDiv('sf-playlist-container');
-  container.classList.add('plugin-container');
-  
-  // Header
-  const header = DOM.createDiv('sf-playlist-header');
-  header.innerHTML = '📚 My Playlist';
-  
-  // Note/Note list
-  const items = [];
-  const obsidian = window.PluginAPI.app.vault;
-  
-  obsidian.vault.getAllLoadedFiles().forEach(async file => {
-    if (file instanceof obsidian.TFile) {
-      const content = await obsidian.vault.cachedRead(file);
-      const note = {
-        id: file.id,
-        title: file.name,
-        type: file.mimeType === 'text/x-markdown' ? 'markdown' : 'pdf',
-        content: content
-      };
-      
-      items.push(note);
-    }
-  });
-  
-  // Render list
-  items.forEach(item => {
-    const element = DOM.createDiv('sf-playlist-item');
-    element.innerHTML = `
-      <div class="sf-item-content">
-        <span class="sf-item-title">${item.title}</span>
-        <span class="sf-item-type">
-          ${item.type === 'markdown' ? '📄 Note' : '📚 PDF'}
-        </span>
-      </div>
-      <button class="sf-play-btn">▶️ Play</button>
-    `;
-    
-    element.querySelector('.sf-play-btn').addEventListener('click', async () => {
-      await playAudio(item);
-    });
-    
-    container.appendChild(element);
-  });
-  
-  return {
-    header,
-    items: container.querySelectorAll('.sf-playlist-item'),
-    list: container
-  };
-}
-
-/**
- * Create player controls
- */
-function createPlayerControls() {
-  const controls = `
-    <div class="sf-player-controls">
-      <button id="sf-play-pause" class="sf-control-btn">
-        ▶️
-      </button>
-      <button id="sf-next" class="sf-control-btn">
-        Next →
-      </button>
-      <button id="sf-prev" class="sf-control-btn">
-        ← Prev
-      </button>
-      <span class="sf-info">
-        <span class="sf-volume">🔊</span>
-        <span class="sf-speed">1.0x</span>
-        <span class="sf-voice">Aria</span>
-      </span>
-    </div>
-  `;
-  
-  return DOM.createDiv(controls);
-}
-
-/**
- * Create settings component
- */
-function createSettingsComponent() {
-  const settings = `
-    <div class="sf-settings-panel">
-      <h3>🔐 Account</h3>
-      <button id="sf-login" class="sf-btn">
-        Log In
-      </button>
-      <button id="sf-logout" class="sf-btn sf-btn-outline">
-        Log Out
-      </button>
-      
-      <div id="sf-settings-form" class="sf-form" style="display:none;">
-        <div class="sf-form-group">
-          <label>Email Address</label>
-          <input type="email" name="email" placeholder="you@example.com" />
-        </div>
-        <div class="sf-form-group">
-          <label>Password</label>
-          <input type="password" name="password" placeholder="••••••••" />
-        </div>
-        <button id="sf-submit-form" class="sf-btn">
-          Submit
-        </button>
-      </div>
-    </div>
-  `;
-  
-  return DOM.createDiv(settings);
+  // This would show notes/PDFs in a separate view
+  console.log('[SeferFlow] Play list component created');
 }
 
 /**
  * Create usage stats component
  */
 function createUsageStatsComponent() {
-  const stats = `
-    <div class="sf-usage-panel">
-      <h4>📊 Usage Statistics</h4>
-      <div id="sf-usage-stats" class="sf-usage-stats"></div>
-    </div>
-  `;
-  
-  return DOM.createDiv(stats);
+  // Already created in settings component
 }
 
 /**
- * Setup event listeners
+ * Handle authentication clicks
  */
-function setupEventListeners() {
-  // Play/Pause toggle
-  window.PLUGIN_API?.obsidian?.addEventRef(window.PLUGIN_API?.obsidian).ref.set(
-    'play-pause',
-    async () => {
-      const session = await apiClient.getCurrentSession();
-      if (session) {
-        await playAudio(session);
-      }
-    }
-  );
+function handleAuthClick(event) {
+  const button = event.target.closest('button');
   
-  // Next track
-  window.PLUGIN_API?.obsidian?.addEventRef('skip-next');
+  if (button?.id === 'sf-login') {
+    const form = event.target.id === 'sf-login' 
+      ? event.target.closest('.sf-settings-form')?.querySelector('.sf-auth-form') : null;
+    form?.style.display = 'block';
+  }
 }
 
 /**
- * Play audio from note/PDF
+ * Handle login form submission
  */
-async function playAudio(item) {
+async function handleLoginForm(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  
+  const formData = new FormData(event.target);
+  const email = formData.get('email');
+  const password = formData.get('password');
+  
   try {
-    await createPlaybackSession(item);
+    const response = await apiClient.loginUser({ email, password });
+    
+    if (response?.access_token) {
+      localStorage.setItem('seferflow_access_token', response.access_token);
+      localStorage.setItem('seferflow_user', JSON.stringify(response.user));
+      
+      event.target.closest('.sf-settings-form').style.display = 'none';
+      event.target.closest('.sf-login-status').classList.replace('sf-login-status', 'sf-login-success');
+      event.target.closest('.sf-login-status').innerText = 'Logged in successfully!';
+      
+      displayUsageStats(response.user);
+    }
   } catch (error) {
-    console.error('Error playing audio:', error);
+    console.error('Login error:', error);
+    alert('Login failed: ' + error.message);
   }
-}
-
-/**
- * Create new playback session
- */
-async function createPlaybackSession(item) {
-  if (!apiClient) {
-    return;
-  }
-  
-  await fetch(`${apiClient.baseUrl}/api/v1/playback/session`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${localStorage.getItem('seferflow_access_token')}`,
-      'X-Requested-With': 'X'
-    },
-    body: JSON.stringify({
-      pdf_path: item.type === 'pdf' ? item.path : '',
-      chapter: item.title,
-      voice: 'en-US-AriaNeural',
-      speed: 1.0,
-      buffer_size: 6
-    })
-  });
 }
 
 /**
  * Display usage statistics
  */
 function displayUsageStats(user) {
-  const remainingHours = user.monthly_limit_hours - user.used_hours;
+  const stats = document.getElementById('sf-usage-stats');
   
-  // Calculate usage percentage
-  const usagePercent = (user.used_hours / user.monthly_limit_hours) * 100;
-  
-  // Display in settings
-  document.getElementById('sf-usage-stats').innerHTML = `
+  stats.innerHTML = `
     <div class="sf-usage-item">
       <span class="sf-usage-label">Tier:</span>
-      <span class="sf-usage-value">${user.tier === 'free' ? 'Free' : 'Premium'}</span>
+      <span class="sf-usage-value">${user.tier === 'free' ? 'Free (4h/mo)' : 'Premium (Unlimited)'}</span>
     </div>
     <div class="sf-usage-item">
       <span class="sf-usage-label">Used:</span>
-      <span class="sf-usage-value">${user.used_hours} / ${user.monthly_limit_hours} hours</span>
+      <span class="sf-usage-value">${user.used_hours || 0} ${user.monthly_limit_hours ? '/ ' + user.monthly_limit_hours + 'h' : ''}</span>
     </div>
     <div class="sf-usage-item">
       <span class="sf-usage-label">Remaining:</span>
-      <span class="sf-usage-value">
-        ${remainingHours} hours 
-        (${(100 - usagePercent).toFixed(0)}%)
-      </span>
-    </div>
-    <div class="sf-usage-item">
-      <span class="sf-usage-label">Sessions:</span>
-      <span class="sf-usage-value">${user.sessions_played || 0}</span>
+      <span class="sf-usage-value">${user.monthly_limit_hours ? (user.monthly_limit_hours - user.used_hours) + 'h' : 'Unlimited'}</span>
     </div>
   `;
-  
-  // If monthly limit is reached, disable play buttons
-  if (remainingHours <= 0 && user.tier === 'free') {
-    alert('Monthly usage limit reached. Please wait for reset on ' + 
-          new Date(user.reset_date).toLocaleDateString());
-    return;
-  }
 }
 
 /**
- * Submit login form
+ * SeferFlow API client
  */
-function submitLoginForm(event) {
-  const formData = new FormData(event.target);
-  
-  const email = formData.get('email');
-  const password = formData.get('password');
-  
-  apiClient.loginUser({
-    email,
-    password
-  }).then(response => {
-    alert('Logged in successfully!');
-    displayUsageStats(response.user);
-  });
-}
-
-/**
- * Submit registration form
- */
-function submitRegisterForm(event) {
-  const formData = new FormData(event.target);
-  
-  const email = formData.get('email');
-  const password = formData.get('password');
-  
-  apiClient.registerUser({
-    email,
-    password,
-    role: 'listener'
-  }).then(response => {
-    alert('Account created successfully! You are now logged in.');
-    displayUsageStats(response.user);
-  });
-}
-
-/**
- * Handle form submissions
- */
-function handleFormSubmission(event) {
-  if (event.target.id === 'sf-login') {
-    const form = event.target.closest('.sf-settings-form');
-    if (form && form.style.display !== 'block') {
-      form.style.display = 'block';
-      
-      const loginBtn = event.target;
-      loginBtn.innerText = 'Logging in...';
-    }
+class SeferFlowAPIClient {
+  constructor(vault) {
+    this.vault = vault;
+    this.baseUrl = 'http://localhost:8000';
   }
   
-  // Handle form submission
-  event.preventDefault();
-  const btn = event.target.closest('.sf-btn')?.parentElement?.closest('button')?.querySelector('button');
-  submitLoginForm?.(event);
-}
-
-/**
- * Setup form submissions
- */
-function setupFormSubmissions() {
-  const forms = document.querySelectorAll('.sf-settings-form');
-  forms.forEach((form, index) => {
-    const email = form.querySelector('input[type="email"]');
-    const password = form.querySelector('input[type="password"]');
-    const loginBtn = form.closest('.sf-settings-form')?.querySelector('.sf-btn');
+  async loginUser(credentials) {
+    const url = new URL(`${this.baseUrl}/api/v1/auth/login`);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(credentials)
+    });
     
-    if (email && password && loginBtn) {
-      email.addEventListener('input', () => {
-        loginBtn.innerText = email.value ? 'Log in' : 'Log in';
-      });
-      
-      password.addEventListener('input', () => {
-        loginBtn.innerText = password.value ? 'Log in' : 'Log in';
-      });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
-  });
+    
+    return await response.json();
+  }
 }
 
-// Initialize plugin on activation
-on.activate = activate;
-on.deactivate = deactivate;
-on.update = (options) => {
-  console.log('[SeferFlow] Updated', options?.version);
-};
-
-on.autoSave = true; // Save to file on every change
-on.excludeFromAutosave = false;
+/**
+ * Initialize plugin
+ */
+console.log('[SeferFlow] Plugin loaded');
