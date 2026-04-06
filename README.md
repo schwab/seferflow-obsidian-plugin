@@ -49,9 +49,6 @@ An Obsidian plugin that integrates with the SeferFlow API to create intelligent 
 5. **Restart Obsidian** to complete installation
 
 ### Option 2: Install from GitHub
-
-### Option 2: Install from GitHub
-
 ```bash
 # Clone the plugin repository
 git clone https://github.com/schwab/seferflow-obsidian-plugin.git
