@@ -43,7 +43,7 @@ An Obsidian plugin that integrates with the SeferFlow API to create intelligent 
 ### 1. Clone Repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/seferflow-obsidian-plugin.git
+git clone https://github.com/schwab/seferflow-obsidian-plugin.git
 cd seferflow-obsidian-plugin
 ```
 
