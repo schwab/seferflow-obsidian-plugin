@@ -3,21 +3,16 @@
   "name": "SeferFlow - Audiobook Player",
   "version": "1.0.0",
   "minAppVersion": "0.15.0",
-  "description": "Stream audiobooks from your Obsidian vault with SeferFlow API. Create playlists, choose voices, and track usage.",
+  "description": "Stream audiobooks from your Obsidian vault with SeferFlow API",
   "author": "Your Name",
   "authorUrl": "https://seferflow.example.com",
   "fundingUrl": "https://seferflow.example.com/support",
   "donateUrl": "https://seferflow.example.com/donate",
   "isDesktopOnly": false,
   "head": [],
-  "styles": [
-    "styles.css"
-  ],
+  "styles": [],
   "scripts": [
     "main.js"
   ],
-  "icons": {
-    "large": "icons/icon.png"
-  },
   "manifestVersion": 2
 }
