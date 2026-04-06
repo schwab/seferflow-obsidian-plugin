@@ -1,0 +1,40 @@
+# Node modules
+node_modules/
+npm-debug.log*
+
+# Build files
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Test files (should not be in plugin repo)
+test_*.py
+tests/
+test_*.ts
+*.test.ts
+*.spec.ts
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Local config
+config.local.js
+config.local.json
+.env
+.env.local
+
+# OS files
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+
+# Plugin temp files
+temp/

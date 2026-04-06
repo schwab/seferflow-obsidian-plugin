@@ -72,3 +72,5 @@ site/
 Thumbs.db
 .DS_Store
 *.lnk
+
+node_modules/
