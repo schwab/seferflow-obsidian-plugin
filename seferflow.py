@@ -735,10 +735,15 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
                 pass
 
             if controls.paused.is_set() and not state.paused:
+                # Pausing: capture the exact current offset before stopping, freeze the timer
+                pause_offset = sample_offset + int((time.time() - state.play_start_time) * sample_rate)
+                sample_offset = pause_offset  # Save so we can resume from here
                 state.elapsed_before_pause += time.time() - state.play_start_time
+                state.play_start_time = 0  # Zero this so timer stops during pause
                 state.paused = True
                 sd.stop()
             elif not controls.paused.is_set() and state.paused:
+                # Resuming: sample_offset was saved, reset play_start_time to resume timing
                 state.paused = False
                 state.play_start_time = time.time()
                 current = _current_offset()
