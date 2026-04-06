@@ -684,58 +684,40 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
     keyboard_thread = threading.Thread(target=_keyboard_reader, args=(controls, keyboard_stop), daemon=True)
     keyboard_thread.start()
 
-    # Pre-buffer chunks before starting playback to avoid starvation from slow edge-tts
-    # CRITICAL: Must pre-buffer enough to handle the 2-chunk concatenation strategy
-    # With ~5s/chunk generation and ~20-40s playback time, we need 8+ chunks buffered
-    print("🔄 Pre-buffering audio chunks...")
-    target_buffer = min(8, total_chunks)  # Pre-buffer 8 chunks (or all if chapter is short)
-    while audio_queue.qsize() < target_buffer and not stop_event.is_set() and not error_happened[0]:
-        time.sleep(0.1)
-    print(f"✓ {audio_queue.qsize()} chunks buffered, starting playback\n")
+    # Pre-buffer minimum chunks before starting playback
+    # Keep startup time reasonable while having some buffer
+    print("🔄 Pre-buffering audio chunks (waiting ~15 seconds)...")
+    pre_buffer_start = time.time()
+    # Wait ~15 seconds for producer to build some buffer (3-4 chunks at ~5s per chunk)
+    # This provides some safety margin without excessive startup delay
+    while time.time() - pre_buffer_start < 15 and not stop_event.is_set() and not error_happened[0]:
+        time.sleep(0.2)
+    pre_buffer_time = time.time() - pre_buffer_start
+    print(f"✓ Pre-buffering complete, starting playback...\n")
 
     # Main thread plays chunks as they become available
-    # Buffer 2 chunks together to avoid choppiness at transitions
-    buffered_samples = None
-    buffered_sr = None
+    # CRITICAL CHANGE: Play single chunks, not concatenated pairs
+    # This matches generation speed (1 chunk per 5s) with playback consumption
+    # (1 chunk per 10-20s depending on text length)
 
     try:
         while True:
             item = audio_queue.get()  # Blocks until chunk is ready
             if item is None:
-                # Last chunk - play any buffered audio
-                if buffered_samples is not None:
-                    state.chunks_played += 1
-                    try:
-                        play_audio_with_display(buffered_samples, buffered_sr, state,
-                                               chapter_name, voice.split('-')[1][:4], speed,
-                                               controls)
-                    except ChapterChangeRequest as e:
-                        chapter_result = e.direction
-                        break
+                # All chunks generated and consumed
                 break
 
             samples, sr = item
+            state.chunks_played += 1
 
-            if buffered_samples is None:
-                # First chunk - just buffer it
-                buffered_samples = samples
-                buffered_sr = sr
-            else:
-                # We have a buffered chunk - concatenate and play
-                state.chunks_played += 1
-                combined = np.concatenate([buffered_samples, samples])
-
-                try:
-                    play_audio_with_display(combined, sr, state,
-                                           chapter_name, voice.split('-')[1][:4], speed,
-                                           controls)
-                except ChapterChangeRequest as e:
-                    chapter_result = e.direction
-                    break
-
-                # Current chunk becomes the new buffer
-                buffered_samples = None
-                buffered_sr = None
+            try:
+                # Play this single chunk directly (no concatenation)
+                play_audio_with_display(samples, sr, state,
+                                       chapter_name, voice.split('-')[1][:4], speed,
+                                       controls)
+            except ChapterChangeRequest as e:
+                chapter_result = e.direction
+                break
 
             if stop_event.is_set():
                 break
