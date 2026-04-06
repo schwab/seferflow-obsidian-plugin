@@ -337,6 +337,10 @@ def generate_speech(text: str, voice: str = "en-US-AriaNeural", speed: float = 1
         with io.BytesIO(audio_bytes) as f:
             data, sr = sf.read(f, dtype=np.float32)
 
+        # Remove silence gaps introduced by edge-tts MP3 concatenation
+        # This fixes the 0.8-1.0s pauses that occur throughout playback
+        data = remove_silence_gaps(data, sr, silence_threshold=0.001, min_silence_duration=0.3)
+
         return data, sr
 
     except Exception as e:
@@ -367,6 +371,78 @@ def trim_silence(samples: np.ndarray, threshold: float = 0.01) -> np.ndarray:
     end = nonzero[-1] + 1
 
     return samples[start:end]
+
+
+def remove_silence_gaps(samples: np.ndarray, sr: int,
+                       silence_threshold: float = 0.001,
+                       min_silence_duration: float = 0.3) -> np.ndarray:
+    """Remove long silence gaps from audio (e.g., between edge-tts MP3 chunks).
+
+    Edge-TTS concatenates MP3 streaming chunks which create ~0.8-1.0s gaps of
+    complete silence between them. This function detects and removes those gaps.
+
+    Args:
+        samples: Audio samples (numpy array)
+        sr: Sample rate in Hz
+        silence_threshold: Amplitude below this is considered silent (default 0.001 = very quiet)
+        min_silence_duration: Minimum duration of silence to remove (seconds)
+
+    Returns:
+        Audio with long silence gaps removed
+    """
+    if len(samples) == 0:
+        return samples
+
+    # Detect silence: samples below threshold
+    min_silence_samples = int(min_silence_duration * sr)
+    is_silent = np.abs(samples) < silence_threshold
+
+    # Find silence regions
+    not_silent = ~is_silent
+    changes = np.diff(not_silent.astype(int))
+
+    # changes == -1: transition from sound to silence
+    # changes == +1: transition from silence to sound
+    silence_starts = np.where(changes == -1)[0] + 1
+    silence_ends = np.where(changes == 1)[0] + 1
+
+    # Handle silence at the beginning
+    if is_silent[0]:
+        silence_starts = np.concatenate([[0], silence_starts])
+
+    # Handle silence at the end
+    if is_silent[-1]:
+        silence_ends = np.concatenate([silence_ends, [len(samples)]])
+
+    # Keep only long silence gaps
+    long_silences = []
+    for start, end in zip(silence_starts, silence_ends):
+        duration = (end - start) / sr
+        if duration >= min_silence_duration:
+            long_silences.append((start, end))
+
+    # Remove long silence gaps by concatenating non-silent sections
+    if not long_silences:
+        return samples  # No long silences to remove
+
+    # Build output by keeping everything except long silences
+    output = []
+    current_pos = 0
+
+    for silence_start, silence_end in long_silences:
+        # Keep audio before this silence
+        if silence_start > current_pos:
+            output.append(samples[current_pos:silence_start])
+        current_pos = silence_end
+
+    # Keep audio after last silence
+    if current_pos < len(samples):
+        output.append(samples[current_pos:])
+
+    if output:
+        return np.concatenate(output)
+    else:
+        return samples
 
 
 def normalize_audio(samples: np.ndarray) -> np.ndarray:
@@ -620,8 +696,8 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
                 # The queue.put() will block if maxsize is reached, which is fine.
                 samples, sr = generate_speech(chunk, voice, speed)
 
-                # TEMPORARY DEBUG: Disable trim_silence to test if it's creating pauses
-                # samples = trim_silence(samples)  # DISABLED FOR TESTING
+                # Trim silence from chunk edges (not the same as removing gaps)
+                samples = trim_silence(samples)
                 duration = len(samples) / sr
                 state.chunk_durations.append(duration)
 
@@ -669,19 +745,12 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
 
             samples, sr = item
             state.chunks_played += 1
-            chunk_duration = len(samples) / sr
-
-            # DEBUG: Log when each chunk starts playing
-            print(f"\n[PLAY] Chunk {state.chunks_played}: duration={chunk_duration:.1f}s, samples={len(samples)}, sr={sr}", file=sys.stderr)
-            sys.stderr.flush()
 
             try:
                 # Play this single chunk directly (no concatenation)
                 play_audio_with_display(samples, sr, state,
                                        chapter_name, voice.split('-')[1][:4], speed,
                                        controls)
-                print(f"[PLAY] Chunk {state.chunks_played}: finished", file=sys.stderr)
-                sys.stderr.flush()
             except ChapterChangeRequest as e:
                 chapter_result = e.direction
                 break
