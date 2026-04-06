@@ -285,22 +285,30 @@ def preprocess_text(text: str) -> str:
 
 
 def split_into_chunks(text: str, max_chars: int = 2000) -> List[str]:
-    """Split text into chunks by paragraphs, staying within max_chars per chunk."""
-    paragraphs = re.split(r'\n{2,}', text)
+    """Split text into chunks by sentences, staying within max_chars per chunk.
+
+    CRITICAL: Split by sentences (not paragraphs) so edge-tts doesn't insert
+    prosody pauses in the middle of chunks. This preserves natural inflection
+    without unnatural gaps.
+    """
+    # Split by sentence boundaries: period, exclamation, question mark
+    # Use regex to split while keeping the punctuation
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+
     chunks = []
     current_chunk = ""
 
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
             continue
 
-        # If adding this paragraph would exceed max, save current chunk
-        if current_chunk and len(current_chunk) + len(para) > max_chars:
+        # If adding this sentence would exceed max, save current chunk
+        if current_chunk and len(current_chunk) + len(sentence) + 1 > max_chars:
             chunks.append(current_chunk.strip())
-            current_chunk = para
+            current_chunk = sentence
         else:
-            current_chunk = (current_chunk + "\n\n" + para).strip() if current_chunk else para
+            current_chunk = (current_chunk + " " + sentence).strip() if current_chunk else sentence
 
     if current_chunk.strip():
         chunks.append(current_chunk.strip())
@@ -336,10 +344,6 @@ def generate_speech(text: str, voice: str = "en-US-AriaNeural", speed: float = 1
 
         with io.BytesIO(audio_bytes) as f:
             data, sr = sf.read(f, dtype=np.float32)
-
-        # Remove silence gaps introduced by edge-tts MP3 concatenation
-        # This fixes the 0.8-1.0s pauses that occur throughout playback
-        data = remove_silence_gaps(data, sr, silence_threshold=0.001, min_silence_duration=0.3)
 
         return data, sr
 
