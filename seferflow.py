@@ -638,6 +638,33 @@ def _build_display(state: PlaybackState, chapter_name: str, voice_short: str, sp
     return Panel(content, title=status_text, expand=False)
 
 
+def _render_status_line(state: PlaybackState, chapter_name: str, voice_short: str, speed: float):
+    """Print a single-line status using \\r for in-place update. Minimal terminal I/O for audio compatibility."""
+    if state.paused:
+        status = "⏸ PAUSED"
+    elif state.chunks_played >= state.total_chunks:
+        status = "✓ DONE"
+    else:
+        status = "▶ PLAYING"
+
+    elapsed = state.elapsed_before_pause + (time.time() - state.play_start_time) if state.play_start_time > 0 else state.elapsed_before_pause
+    pct = int(100 * state.chunks_played / max(state.total_chunks, 1))
+    buffered = state.chunks_generated - state.chunks_played
+
+    # Single line, fits in 80 cols
+    line = (f"\r{status}  {state.chunks_played}/{state.total_chunks} [{pct:3d}%]  "
+            f"{fmt_time(elapsed)} {speed}x  {voice_short}  "
+            f"Buffer: {buffered}/{state.queue_max}  "
+            f"[Space] Pause  [←→] Seek  [q] Quit")
+
+    # Pad to 80 chars to clear any previous longer line
+    line = line[:100]  # Truncate if somehow too long
+    line = line.ljust(100)
+
+    sys.stdout.write(line)
+    sys.stdout.flush()
+
+
 def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: PlaybackState,
                             chapter_name: str, voice_short: str, speed: float,
                             controls: PlayerControls):
@@ -718,36 +745,26 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
                 if current < len(samples):
                     sd.play(samples[current:], sample_rate, latency='low')
 
-        if RICH_AVAILABLE and _console:
-            # Single polling loop — no separate display thread to avoid GIL contention.
-            # Display updates are rate-limited to 4 Hz inside the same loop.
-            panel = _build_display(state, chapter_name, voice_short, speed,
-                                   _current_offset(), len(samples), sample_rate)
-            last_display_update = 0.0
-            with Live(panel, console=_console, auto_refresh=False, transient=True) as live:
-                try:
-                    while _is_playing() or state.paused:
-                        _poll_controls()
+        # Polling loop — NO Rich/Live here. Rich's ANSI rendering causes GIL contention
+        # that interrupts the audio stream. Use a minimal \r status line instead,
+        # updated at most once per second.
+        last_display_update = 0.0
+        try:
+            while _is_playing() or state.paused:
+                _poll_controls()
 
-                        now = time.time()
-                        if now - last_display_update >= 0.25:
-                            live.update(_build_display(state, chapter_name, voice_short, speed,
-                                                       _current_offset(), len(samples), sample_rate))
-                            live.refresh()
-                            last_display_update = now
+                now = time.time()
+                if now - last_display_update >= 1.0:
+                    _render_status_line(state, chapter_name, voice_short, speed)
+                    last_display_update = now
 
-                        time.sleep(0.05)
-                except ChapterChangeRequest:
-                    raise
-        else:
-            # No Rich: plain polling loop, keyboard controls still work
-            try:
-                while _is_playing() or state.paused:
-                    _poll_controls()
-                    time.sleep(0.05)
-            except KeyboardInterrupt:
-                sd.stop()
-                raise ChapterChangeRequest('quit')
+                time.sleep(0.05)
+        except ChapterChangeRequest:
+            sys.stdout.write('\n')
+            sys.stdout.flush()
+            raise
+        sys.stdout.write('\n')
+        sys.stdout.flush()
 
     except ChapterChangeRequest:
         raise  # Re-raise to be caught by stream_and_play()
