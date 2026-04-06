@@ -850,10 +850,17 @@ def _render_display(state: PlaybackState, chapter_name: str, voice_short: str, s
     lines.append(f"  {section_str:<35} {time_str:>32}")
     lines.append("")  # blank
 
-    # Progress bar (████████░░░░) with colors
-    bar_width = WIDTH - 20
-    filled = int(bar_width * state.chunks_played / max(state.total_chunks, 1))
-    bar = GREEN + "▓" * filled + RESET + "░" * (bar_width - filled) + RESET
+    # Progress bar with layers: green=played, yellow=buffered, gray=remaining
+    bar_width = WIDTH - 22
+    played = int(bar_width * state.chunks_played / max(state.total_chunks, 1))
+    # Buffered extends from played position
+    buffered_end = int(bar_width * (state.chunks_played + buffered) / max(state.total_chunks, 1))
+    buffered_width = max(0, buffered_end - played)
+    remaining = bar_width - played - buffered_width
+
+    bar = (GREEN + "▓" * played + RESET +
+           YELLOW + "▓" * buffered_width + RESET +
+           DARK_GRAY + "░" * remaining + RESET)
     lines.append(f"  📊 Progress:  {bar}  {pct:3d}%")
     lines.append("")  # blank
 
