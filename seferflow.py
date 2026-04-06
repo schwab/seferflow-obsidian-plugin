@@ -96,7 +96,7 @@ else:
 
 def load_settings() -> Dict[str, any]:
     """Load saved settings from disk or return defaults."""
-    defaults = {"voice": "en-US-AriaNeural", "speed": 1.0}
+    defaults = {"voice": "en-US-AriaNeural", "speed": 1.0, "buffer_size": 6}
 
     if CONFIG_PATH.exists():
         try:
@@ -115,18 +115,22 @@ def load_settings() -> Dict[str, any]:
             }
             if saved.get("voice") in valid_voices:
                 defaults["voice"] = saved["voice"]
+
+            valid_buffer_sizes = {3, 6, 10}
+            if saved.get("buffer_size") in valid_buffer_sizes:
+                defaults["buffer_size"] = saved["buffer_size"]
         except Exception:
             pass  # Silently ignore corrupt config file
 
     return defaults
 
 
-def save_settings(speed: float, voice: str) -> None:
+def save_settings(speed: float, voice: str, buffer_size: int = 6) -> None:
     """Persist current settings to disk."""
     try:
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(CONFIG_PATH, "w") as f:
-            json.dump({"voice": voice, "speed": speed}, f, indent=2)
+            json.dump({"voice": voice, "speed": speed, "buffer_size": buffer_size}, f, indent=2)
     except Exception:
         pass  # Non-fatal: just don't save
 
@@ -815,27 +819,29 @@ def _keyboard_reader(controls: PlayerControls, stop_event: threading.Event):
 
 
 def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
-                    controls: PlayerControls, chapters: List[Dict], chapter_idx: int) -> str:
+                    controls: PlayerControls, chapters: List[Dict], chapter_idx: int,
+                    buffer_size: int = 6) -> str:
     """
     Split chapter into chunks, generate TTS progressively, play as ready.
     Display live buffer/progress visualization during playback.
+
+    Args:
+        buffer_size: Audio queue size in chunks (3=conservative, 6=balanced, 10=aggressive)
     """
     chunks = split_into_chunks(text)
     total_chunks = len(chunks)
 
     # Create shared state
     # queue_max must match the actual audio_queue maxsize for accurate buffer display
-    state = PlaybackState(total_chunks=total_chunks, queue_max=6)
+    state = PlaybackState(total_chunks=total_chunks, queue_max=buffer_size)
 
     print(f"\n📚 {chapter_name}")
     print(f"   {total_chunks} sections to generate and play")
-    print(f"   Speed: {speed}x  Voice: {voice}")
+    print(f"   Speed: {speed}x  Voice: {voice}  Buffer: {buffer_size} chunks")
     print(f"   Controls: [Space] Pause  [←/→] ±5s  [n/p] Chapter  [q] Quit\n")
     time.sleep(1)
 
-    # Buffer size reduced now that sentence reconstruction fixes pauses.
-    # With proper sentence boundaries, 3-4 chunks (15-20s of audio) is sufficient
-    audio_queue = queue.Queue(maxsize=6)
+    audio_queue = queue.Queue(maxsize=buffer_size)
     stop_event = threading.Event()
     error_happened = [False]
     chapter_result = 'done'  # Default result
@@ -938,7 +944,8 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
     return chapter_result
 
 
-def settings_menu(default_speed: float = 1.0, default_voice: str = "en-US-AriaNeural") -> Tuple[Optional[float], Optional[str]]:
+def settings_menu(default_speed: float = 1.0, default_voice: str = "en-US-AriaNeural",
+                  default_buffer: int = 6) -> Tuple[Optional[float], Optional[str], Optional[int]]:
     """Show pre-generation settings menu with direct selection."""
     speeds = [0.8, 0.9, 1.0, 1.1, 1.2, 1.3]
     voices = [
@@ -947,9 +954,15 @@ def settings_menu(default_speed: float = 1.0, default_voice: str = "en-US-AriaNe
         ("c", "en-GB-LibbyNeural", "Female (British)"),
         ("d", "en-GB-RyanNeural", "Male (British)"),
     ]
+    buffers = [
+        ("x", 3, "Conservative (less memory, responsive)"),
+        ("y", 6, "Balanced (default)"),
+        ("z", 10, "Aggressive (smooth, more memory)"),
+    ]
 
     current_speed = default_speed
     current_voice = default_voice
+    current_buffer = default_buffer
 
     while True:
         clear_screen()
@@ -969,15 +982,21 @@ def settings_menu(default_speed: float = 1.0, default_voice: str = "en-US-AriaNe
             print(f"  [{code}] {desc}{marker}")
         print()
 
+        print(f"Buffer Size: {current_buffer} chunks")
+        for code, size, desc in buffers:
+            marker = " ← current" if size == current_buffer else ""
+            print(f"  [{code}] {size:>2} chunks  {desc}{marker}")
+        print()
+
         print("[Enter] Start reading  [q] Cancel\n")
 
-        choice = clean_input("Enter speed [1-6], voice [a-d], or [Enter]/[q]: ").lower()
+        choice = clean_input("Enter speed [1-6], voice [a-d], buffer [x-z], or [Enter]/[q]: ").lower()
 
         if choice == 'q':
-            return None, None
+            return None, None, None
         elif choice == '':
             # Start reading with current settings
-            return current_speed, current_voice
+            return current_speed, current_voice, current_buffer
         elif choice in ('1', '2', '3', '4', '5', '6'):
             # Direct speed selection
             idx = int(choice) - 1
@@ -987,6 +1006,12 @@ def settings_menu(default_speed: float = 1.0, default_voice: str = "en-US-AriaNe
             for code, voice_id, _ in voices:
                 if choice == code:
                     current_voice = voice_id
+                    break
+        elif choice in ('x', 'y', 'z'):
+            # Direct buffer selection
+            for code, size, _ in buffers:
+                if choice == code:
+                    current_buffer = size
                     break
         # Otherwise loop back
 
@@ -1030,16 +1055,17 @@ def main():
         # Get chapter index
         chapter_idx = next((i for i, ch in enumerate(chapters) if ch['num'] == chapter['num']), 0)
 
-        # Step 6: Settings menu (voice and speed) - load saved defaults
+        # Step 6: Settings menu (voice, speed, and buffer) - load saved defaults
         saved_settings = load_settings()
-        speed, voice = settings_menu(default_speed=saved_settings["speed"],
-                                     default_voice=saved_settings["voice"])
+        speed, voice, buffer_size = settings_menu(default_speed=saved_settings["speed"],
+                                                   default_voice=saved_settings["voice"],
+                                                   default_buffer=saved_settings["buffer_size"])
         if speed is None:
             print("Cancelled.")
             return 0
 
         # Save settings for next time
-        save_settings(speed, voice)
+        save_settings(speed, voice, buffer_size)
 
         # Create player controls (shared across chapter changes)
         controls = PlayerControls()
@@ -1066,7 +1092,7 @@ def main():
             # Stream and play with visualization
             try:
                 result = stream_and_play(text, voice, speed, chapter['title'],
-                                        controls, chapters, chapter_idx)
+                                        controls, chapters, chapter_idx, buffer_size)
             except Exception as e:
                 print(f"❌ Playback failed: {e}")
                 return 1
