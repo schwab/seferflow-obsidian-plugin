@@ -908,11 +908,21 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
         return sample_offset + int(elapsed * sample_rate)
 
     def _restart_from(offset: int):
-        """Stop playback and restart from a new sample offset."""
+        """Stop playback and restart from a new sample offset within current chunk."""
         nonlocal sample_offset
         sample_offset = max(0, min(len(samples) - 1, offset))
-        # Update elapsed_before_pause so the timer shows the correct position
-        state.elapsed_before_pause = sample_offset / sample_rate
+        time_in_chunk = sample_offset / sample_rate
+
+        # When seeking, we need to preserve the time from completed chunks
+        # Total elapsed = (time to start of current chunk) + (time within chunk)
+        # We estimate time to start of current chunk using average duration
+        if state.chunk_durations and state.chunks_played > 0:
+            avg_chunk_duration = sum(state.chunk_durations) / len(state.chunk_durations)
+            time_before_current_chunk = avg_chunk_duration * (state.chunks_played - 1)
+            state.elapsed_before_pause = time_before_current_chunk + time_in_chunk
+        else:
+            state.elapsed_before_pause = time_in_chunk
+
         sd.stop()
         state.play_start_time = time.time()
         state.paused = False
@@ -999,8 +1009,13 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
             sys.stdout.write('\n')
             sys.stdout.flush()
             raise
-        sys.stdout.write('\n')
-        sys.stdout.flush()
+        finally:
+            # Save total elapsed time before returning so next chunk continues from here
+            if state.play_start_time > 0 and not state.paused:
+                state.elapsed_before_pause += time.time() - state.play_start_time
+                state.play_start_time = 0
+            sys.stdout.write('\n')
+            sys.stdout.flush()
 
     except ChapterChangeRequest:
         raise  # Re-raise to be caught by stream_and_play()
@@ -1133,6 +1148,12 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
         time.sleep(0.1)
     pre_buffer_time = time.time() - pre_buffer_start
     print(f"✓ Pre-buffering complete ({audio_queue.qsize()} chunks), starting playback...\n")
+
+    # If resuming from a saved position, estimate elapsed time based on average chunk duration
+    if start_chunk > 0 and state.chunk_durations:
+        avg_chunk_duration = sum(state.chunk_durations) / len(state.chunk_durations)
+        estimated_elapsed = avg_chunk_duration * start_chunk
+        state.elapsed_before_pause = estimated_elapsed
 
     # Main thread plays chunks as they become available
     # CRITICAL CHANGE: Play single chunks, not concatenated pairs
