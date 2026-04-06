@@ -645,10 +645,13 @@ def _render_display(state: PlaybackState, chapter_name: str, voice_short: str, s
 
     if state.paused:
         status_icon = "⏸ PAUSED"
+        status_emoji = "🟡"
     elif state.chunks_played >= state.total_chunks:
-        status_icon = "✓ DONE"
+        status_icon = "✅ DONE"
+        status_emoji = "🎉"
     else:
-        status_icon = "▶ PLAYING"
+        status_icon = "▶️  PLAYING"
+        status_emoji = "🔊"
 
     # Calculate timings
     elapsed = state.elapsed_before_pause + (time.time() - state.play_start_time) if state.play_start_time > 0 else state.elapsed_before_pause
@@ -667,44 +670,44 @@ def _render_display(state: PlaybackState, chapter_name: str, voice_short: str, s
     lines = []
 
     # Top border
-    lines.append("─" * WIDTH)
+    lines.append("━" * WIDTH)
 
-    # Status line: icon and chapter on left, speed/voice on right
-    status_section = f"{status_icon}   {chapter_name[:40]}"
-    voice_section = f"{speed:.1f}x  {voice_short}"
-    padding = WIDTH - len(status_section) - len(voice_section)
-    lines.append(status_section + " " * padding + voice_section)
+    # Status line: emoji, icon and chapter on left, speed/voice on right
+    status_section = f"{status_emoji}  {status_icon}   {chapter_name[:35]}"
+    voice_section = f"{speed:.1f}x  🎤 {voice_short}"
+    padding = WIDTH - len(status_section) - len(voice_section) - 2
+    lines.append(status_section + " " * max(padding, 1) + voice_section)
 
     # Border
-    lines.append("─" * WIDTH)
+    lines.append("━" * WIDTH)
     lines.append("")  # blank
 
     # Section progress
-    section_str = f"Section {state.chunks_played} of {state.total_chunks}"
-    time_str = f"{fmt_time(elapsed)} / ~{fmt_time(total_est)} est."
-    lines.append(f"  {section_str:<35} {time_str:>31}")
+    section_str = f"📚 Section {state.chunks_played} of {state.total_chunks}"
+    time_str = f"⏱️  {fmt_time(elapsed)} / ~{fmt_time(total_est)}"
+    lines.append(f"  {section_str:<37} {time_str:>30}")
     lines.append("")  # blank
 
     # Progress bar (████████░░░░)
-    bar_width = WIDTH - 12
+    bar_width = WIDTH - 14
     filled = int(bar_width * state.chunks_played / max(state.total_chunks, 1))
-    bar = "█" * filled + "░" * (bar_width - filled)
-    lines.append(f"  Progress:  {bar}  {pct:3d}%")
+    bar = "▓" * filled + "░" * (bar_width - filled)
+    lines.append(f"  📊 Progress:  {bar}  {pct:3d}%")
     lines.append("")  # blank
 
     # Buffer bar
     buf_width = 15
     buf_filled = min(buffered, state.queue_max)
-    buf_bar = "█" * buf_filled + "░" * (state.queue_max - buf_filled)
-    gen_status = "↺ generating..." if state.generating else "✓ all generated"
-    lines.append(f"  Buffer:    [{buf_bar}]  {buffered}/{state.queue_max} ready    {gen_status}")
+    buf_bar = "▓" * buf_filled + "░" * (state.queue_max - buf_filled)
+    gen_status = "⟳ generating..." if state.generating else "✅ ready"
+    lines.append(f"  📦 Buffer:    [{buf_bar}]  {buffered}/{state.queue_max}  {gen_status}")
     lines.append("")  # blank
 
-    # Help text
-    lines.append("  [Space] Pause  [←/→] ±5s  [n/p] Chapter  [q] Quit")
+    # Help text with emojis
+    lines.append("  ⌨️  Controls:  [Space] ⏯  [← →] Skip ±5s  [n/p] Chapters  [q] Quit")
 
     # Bottom border
-    lines.append("─" * WIDTH)
+    lines.append("━" * WIDTH)
 
     # Print all at once with carriage return at top to overwrite
     sys.stdout.write("\033[H\033[2J")  # Clear screen
