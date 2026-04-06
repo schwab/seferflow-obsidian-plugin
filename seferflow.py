@@ -660,8 +660,8 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
                 # The queue.put() will block if maxsize is reached, which is fine.
                 samples, sr = generate_speech(chunk, voice, speed)
 
-                # Trim silence from start/end of each chunk to eliminate gaps
-                samples = trim_silence(samples)
+                # TEMPORARY DEBUG: Disable trim_silence to test if it's creating pauses
+                # samples = trim_silence(samples)  # DISABLED FOR TESTING
                 duration = len(samples) / sr
                 state.chunk_durations.append(duration)
 
