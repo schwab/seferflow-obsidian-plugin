@@ -105,15 +105,22 @@ except RedisError:
 
 # Database Engine
 database_engine = sqlmodel.SQLModel
-engine = sa_create_engine(
-    os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost/seferflow"),
-    pool_pre_ping=True,
-    pool_size=int(os.getenv("DB_POOL_SIZE", "10")),
-    max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "20")),
-)
+engine = None
 
-# Create tables (if exists)
-SQLModel.metadata.create_all(bind=engine)
+try:
+    engine = sa_create_engine(
+        os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost/seferflow"),
+        pool_pre_ping=True,
+        pool_size=int(os.getenv("DB_POOL_SIZE", "10")),
+        max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "20")),
+    )
+    # Try to create tables
+    SQLModel.metadata.create_all(bind=engine)
+    print("✓ Database connection established")
+except Exception as e:
+    print(f"⚠ Database not available: {e}")
+    print("  API will run without persistence")
+    engine = None
 
 # JWT Configuration
 SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_hex(32))
@@ -138,7 +145,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 class User(SQLModel, table=True):
     """User model"""
     __tablename__ = "users"
-    id: Optional[str] = None
+    id: Optional[str] = Field(default=None, primary_key=True)
     email: str = Field(unique=True, index=True)
     username: str
     hashed_password: str
@@ -150,7 +157,7 @@ class User(SQLModel, table=True):
 class PlaybackSession(SQLModel, table=True):
     """Playback session model"""
     __tablename__ = "sessions"
-    id: Optional[str] = None
+    id: Optional[str] = Field(default=None, primary_key=True)
     user_id: str
     pdf_path: str
     chapter: str
@@ -166,7 +173,7 @@ class PlaybackSession(SQLModel, table=True):
 class ProgressRecord(SQLModel, table=True):
     """Progress tracking model"""
     __tablename__ = "progress"
-    id: Optional[str] = None
+    id: Optional[str] = Field(default=None, primary_key=True)
     pdf_path: str
     chapter: str
     last_chunk: int = 0
