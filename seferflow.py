@@ -14,6 +14,7 @@ import tempfile
 import threading
 import queue
 import shutil
+import socket
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 from datetime import datetime
@@ -64,6 +65,7 @@ class PlaybackState:
     play_chunk_index: int = 0
     paused: bool = False  # Whether playback is paused
     elapsed_before_pause: float = 0.0  # Accumulated time before last pause
+    sample_offset: int = 0  # Current chunk sample offset — updated each poll, used by MCP resume
 
     def __post_init__(self):
         if self.chunk_durations is None:
@@ -76,6 +78,12 @@ class PlayerControls:
     paused: threading.Event = field(default_factory=threading.Event)
     cmd_queue: queue.SimpleQueue = field(default_factory=queue.SimpleQueue)
     # Commands: 'seek_forward', 'seek_backward', 'next_chapter', 'prev_chapter', 'quit'
+    mcp_interrupt: threading.Event = field(default_factory=threading.Event)
+    mcp_ready: threading.Event = field(default_factory=threading.Event)  # main→MCP: book paused
+    mcp_done: threading.Event = field(default_factory=threading.Event)   # MCP→main: message done
+    mcp_samples: Optional[np.ndarray] = None   # pre-generated audio for injected message
+    mcp_sample_rate: int = 24000
+    mcp_caption: str = ""                       # display text during interruption
 
 
 class ChapterChangeRequest(Exception):
@@ -88,6 +96,7 @@ class ChapterChangeRequest(Exception):
 # Settings persistence
 CONFIG_PATH = Path.home() / ".config" / "seferflow" / "settings.json"
 PROGRESS_PATH = Path.home() / ".config" / "seferflow" / "progress.json"
+MCP_PORT = 8765
 
 # Rich console for styled display
 if RICH_AVAILABLE:
@@ -991,6 +1000,17 @@ def _render_display(state: PlaybackState, chapter_name: str, voice_short: str, s
     sys.stdout.flush()
 
 
+def _generate_tone(freq_hz: float, duration_s: float, sample_rate: int) -> np.ndarray:
+    """Generate a short sine-wave notification tone."""
+    t = np.linspace(0, duration_s, int(sample_rate * duration_s), endpoint=False)
+    tone = 0.3 * np.sin(2 * np.pi * freq_hz * t).astype(np.float32)
+    # Fade in/out to avoid clicks (10ms each end)
+    fade = int(0.01 * sample_rate)
+    tone[:fade] *= np.linspace(0, 1, fade)
+    tone[-fade:] *= np.linspace(1, 0, fade)
+    return tone
+
+
 def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: PlaybackState,
                             chapter_name: str, voice_short: str, speed: float,
                             controls: PlayerControls, chunk_text: str = ""):
@@ -1006,20 +1026,19 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
         chunk_text: The text content of the current chunk for display (captions)
     """
     samples = normalize_audio(samples)
-    sample_offset = 0
+    state.sample_offset = 0
     SEEK_FORWARD_SAMPLES = int(5 * sample_rate)  # 5-second seek
     SEEK_BACKWARD_SAMPLES = int(5 * sample_rate)
 
     def _current_offset() -> int:
         """Calculate current playback position in samples."""
         elapsed = (time.time() - state.play_start_time) if not state.paused else 0
-        return sample_offset + int(elapsed * sample_rate)
+        return state.sample_offset + int(elapsed * sample_rate)
 
     def _restart_from(offset: int):
         """Stop playback and restart from a new sample offset within current chunk."""
-        nonlocal sample_offset
-        sample_offset = max(0, min(len(samples) - 1, offset))
-        time_in_chunk = sample_offset / sample_rate
+        state.sample_offset = max(0, min(len(samples) - 1, offset))
+        time_in_chunk = state.sample_offset / sample_rate
 
         # When seeking, we need to preserve the time from completed chunks
         # Total elapsed = (time to start of current chunk) + (time within chunk)
@@ -1034,8 +1053,8 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
         sd.stop()
         state.play_start_time = time.time()
         state.paused = False
-        if sample_offset < len(samples):
-            remaining = samples[sample_offset:]
+        if state.sample_offset < len(samples):
+            remaining = samples[state.sample_offset:]
             if len(remaining) > 0:
                 sd.play(remaining, sample_rate, latency='low')
 
@@ -1062,7 +1081,6 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
 
         def _poll_controls():
             """Process one round of keyboard commands and pause/resume. Returns True to continue, False to stop."""
-            nonlocal sample_offset
             try:
                 cmd = controls.cmd_queue.get_nowait()
                 if cmd == 'seek_forward':
@@ -1085,8 +1103,8 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
 
             if controls.paused.is_set() and not state.paused:
                 # Pausing: capture the exact current offset before stopping, freeze the timer
-                pause_offset = sample_offset + int((time.time() - state.play_start_time) * sample_rate)
-                sample_offset = pause_offset  # Save so we can resume from here
+                pause_offset = state.sample_offset + int((time.time() - state.play_start_time) * sample_rate)
+                state.sample_offset = pause_offset  # Save so we can resume from here
                 state.elapsed_before_pause += time.time() - state.play_start_time
                 state.play_start_time = 0  # Zero this so timer stops during pause
                 state.paused = True
@@ -1099,6 +1117,38 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
                 if current < len(samples):
                     sd.play(samples[current:], sample_rate, latency='low')
 
+            # MCP interrupt: an external caller wants to inject speech
+            if controls.mcp_interrupt.is_set() and controls.mcp_samples is not None:
+                # 1. Freeze the book — save exact position, stop sd
+                state.sample_offset = _current_offset()
+                state.elapsed_before_pause += time.time() - state.play_start_time
+                state.play_start_time = 0
+                sd.stop()
+                # 2. Signal MCP thread that book is paused (it is waiting on mcp_ready)
+                controls.mcp_ready.set()
+                # 3. Play notification tone in main thread
+                tone = _generate_tone(880, 0.25, sample_rate)
+                sd.play(tone, sample_rate)
+                sd.wait()
+                # 4. Play the injected message
+                sd.play(controls.mcp_samples, controls.mcp_sample_rate)
+                sd.wait()
+                # 5. Brief closing tone
+                tone2 = _generate_tone(660, 0.2, sample_rate)
+                sd.play(tone2, sample_rate)
+                sd.wait()
+                # 6. Clean up, signal MCP thread that playback is done
+                controls.mcp_interrupt.clear()
+                controls.mcp_caption = ""
+                controls.mcp_samples = None
+                controls.mcp_done.set()
+                # 7. Resume book from saved offset
+                remaining = samples[state.sample_offset:]
+                if len(remaining) > 0:
+                    sd.play(remaining, sample_rate, latency='low')
+                state.play_start_time = time.time()
+                state.paused = False
+
         # Polling loop — NO Rich/Live here. Use simple print() with ANSI clear,
         # updated once per second to minimize terminal I/O and GIL contention.
         last_display_update = 0.0
@@ -1108,8 +1158,9 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
 
                 now = time.time()
                 if now - last_display_update >= 1.0:
+                    display_text = controls.mcp_caption if controls.mcp_interrupt.is_set() else chunk_text
                     _render_display(state, chapter_name, voice_short, speed,
-                                   _current_offset(), len(samples), sample_rate, chunk_text)
+                                   _current_offset(), len(samples), sample_rate, display_text)
                     last_display_update = now
 
                 time.sleep(0.05)
@@ -1406,12 +1457,119 @@ def settings_menu(default_speed: float = 1.0, default_voice: str = "en-US-AriaNe
         # Otherwise loop back
 
 
+def run_mcp_server(controls: PlayerControls, port: int = MCP_PORT):
+    """Listen on TCP port for MCP tool calls. Handles one call at a time.
+
+    Protocol: JSON-RPC 2.0 over a raw TCP socket (newline-delimited).
+    Supported methods:
+      - tools/list  → returns the say_text tool schema
+      - tools/call  → calls say_text with {"text": str, "voice"?: str}
+    """
+    import asyncio
+
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        server_sock.bind(('127.0.0.1', port))
+    except OSError:
+        # Port in use — skip MCP silently
+        return
+    server_sock.listen(5)
+    server_sock.settimeout(1.0)  # Non-blocking accept so thread can exit cleanly
+
+    SAY_TEXT_SCHEMA = {
+        "name": "say_text",
+        "description": "Interrupt the current audiobook and speak the given text aloud, then resume.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Text to speak"},
+                "voice": {"type": "string", "description": "edge-tts voice name (optional)"}
+            },
+            "required": ["text"]
+        }
+    }
+
+    while True:
+        try:
+            conn, _ = server_sock.accept()
+        except socket.timeout:
+            continue
+        except Exception:
+            break
+
+        try:
+            data = b""
+            conn.settimeout(10.0)
+            while b'\n' not in data:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+
+            req = json.loads(data.decode().strip())
+            req_id = req.get("id")
+            method = req.get("method", "")
+
+            if method == "tools/list":
+                resp = {"jsonrpc": "2.0", "id": req_id,
+                        "result": {"tools": [SAY_TEXT_SCHEMA]}}
+
+            elif method == "tools/call":
+                args = req.get("params", {}).get("arguments", {})
+                text = args.get("text", "").strip()
+                voice = args.get("voice", "en-US-AriaNeural")
+
+                if not text:
+                    resp = {"jsonrpc": "2.0", "id": req_id,
+                            "error": {"code": -32602, "message": "text is required"}}
+                else:
+                    # Pre-generate TTS for the message
+                    try:
+                        mcp_samples, mcp_sr = asyncio.run(generate_speech(text, voice, 1.0))
+                        controls.mcp_samples = mcp_samples
+                        controls.mcp_sample_rate = mcp_sr
+                        controls.mcp_caption = text
+                        controls.mcp_ready.clear()
+                        controls.mcp_done.clear()
+                        # Signal the playback loop to interrupt
+                        controls.mcp_interrupt.set()
+                        # Wait for book to pause (mcp_ready) then for message to finish (mcp_done)
+                        controls.mcp_ready.wait(timeout=10.0)
+                        controls.mcp_done.wait(timeout=120.0)
+                        resp = {"jsonrpc": "2.0", "id": req_id,
+                                "result": {"content": [{"type": "text", "text": "Played successfully"}]}}
+                    except Exception as e:
+                        resp = {"jsonrpc": "2.0", "id": req_id,
+                                "error": {"code": -32603, "message": str(e)}}
+            else:
+                resp = {"jsonrpc": "2.0", "id": req_id,
+                        "error": {"code": -32601, "message": f"Method not found: {method}"}}
+
+            conn.sendall((json.dumps(resp) + '\n').encode())
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+
 def main():
     """Main program flow."""
     print("\n" + "=" * 70)
     print("📚 BOOK READER - Starting up...".center(70))
     print("=" * 70)
     time.sleep(1)
+
+    # Start MCP server
+    controls = PlayerControls()
+    mcp_thread = threading.Thread(
+        target=run_mcp_server,
+        args=(controls, MCP_PORT),
+        daemon=True,
+        name="mcp-server"
+    )
+    mcp_thread.start()
+    print(f"  🔌 MCP server listening on 127.0.0.1:{MCP_PORT}")
 
     try:
         # Step 1: Browse and select book
@@ -1457,8 +1615,7 @@ def main():
         # Save settings for next time
         save_settings(speed, voice, buffer_size)
 
-        # Create player controls (shared across chapter changes)
-        controls = PlayerControls()
+        # Note: controls was created earlier to start MCP server
 
         # Step 7: Playback loop with chapter navigation
         while True:
@@ -1514,9 +1671,21 @@ def main():
             # Handle chapter navigation
             if result == 'next_chapter' and chapter_idx < len(chapters) - 1:
                 chapter_idx += 1
+                # Drain any pending MCP interrupt that arrived while between chapters
+                if controls.mcp_interrupt.is_set():
+                    controls.mcp_interrupt.clear()
+                    controls.mcp_samples = None
+                    controls.mcp_caption = ""
+                    controls.mcp_done.set()
                 continue
             elif result == 'prev_chapter' and chapter_idx > 0:
                 chapter_idx -= 1
+                # Drain any pending MCP interrupt that arrived while between chapters
+                if controls.mcp_interrupt.is_set():
+                    controls.mcp_interrupt.clear()
+                    controls.mcp_samples = None
+                    controls.mcp_caption = ""
+                    controls.mcp_done.set()
                 continue
             else:
                 # 'done', 'quit', or boundary reached
