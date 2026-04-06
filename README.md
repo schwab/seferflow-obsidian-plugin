@@ -66,7 +66,7 @@ A complete platform for converting PDF books into natural-sounding audiobooks us
 
 ```bash
 # Clone repository
-git clone https://github.com/YOUR_USERNAME/seferflow.git
+git clone https://github.com/schwab/SeferFlow.git
 cd seferflow
 
 # Create virtual environment
@@ -247,8 +247,8 @@ Create audiobook playlists directly in your Obsidian vault:
 ```bash
 # Install plugin from Obsidian Community Plugins browser
 # Or clone into your plugins directory:
-git clone https://github.com/YOUR_USERNAME/seferflow-obsidian-plugin \
-  ~/.obsidian/plugins/seferflow
+git clone https://github.com/schwab/seferflow-obsidian-plugin.git \
+  --depth 1 ~/.obsidian/plugins/seferflow
 ```
 
 **Features**:
@@ -422,7 +422,7 @@ See `docs/TROUBLESHOOTING.md` for more help.
 ### Setup Development Environment
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/seferflow.git
+git clone https://github.com/schwab/SeferFlow.git
 cd seferflow
 python3 -m venv venv
 source venv/bin/activate
@@ -547,7 +547,7 @@ Built with ❤️ for book lovers who want to listen while they work.
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 
 ### Issues
-Report bugs on [GitHub Issues](https://github.com/YOUR_USERNAME/seferflow/issues)
+Report bugs on [GitHub Issues](https://github.com/schwab/SeferFlow/issues)
 
 ### Contact
 - Open an issue on GitHub
