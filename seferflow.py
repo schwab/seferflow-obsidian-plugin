@@ -646,33 +646,26 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
     def producer():
         """Generate TTS for each chunk in background.
 
-        Aggressive buffering: keeps 6-8 chunks in queue to handle slow edge-tts
-        delivery from the network. Edge-TTS takes 4-6 seconds per chunk, so we
-        pre-buffer heavily to prevent queue starvation.
+        CRITICAL: Producer MUST ALWAYS be generating to keep queue full.
+        Do NOT throttle or wait for queue to drain. Edge-TTS is slow (4-6s/chunk),
+        and playback can consume 2 chunks in parallel. Queue MUST stay ahead.
         """
         for i, chunk in enumerate(chunks):
             if stop_event.is_set():
                 break
 
-            # Wait until queue drains before generating next chunk.
-            # Keep 6+ chunks buffered to handle slow network delivery from edge-tts.
-            while audio_queue.qsize() >= 7 and not stop_event.is_set():
-                time.sleep(0.2)
-
-            if stop_event.is_set():
-                break
-
             try:
+                # Generate immediately - do NOT wait for queue to drain!
+                # The queue.put() will block if maxsize is reached, which is fine.
                 samples, sr = generate_speech(chunk, voice, speed)
+
                 # Trim silence from start/end of each chunk to eliminate gaps
                 samples = trim_silence(samples)
                 duration = len(samples) / sr
                 state.chunk_durations.append(duration)
-                audio_queue.put((samples, sr), block=False)  # non-blocking safe now
-                state.chunks_generated += 1
-            except queue.Full:
-                # Queue shouldn't be full with hysteresis, but handle gracefully
-                audio_queue.put((samples, sr))
+
+                # Block if queue is full - this naturally throttles to playback speed
+                audio_queue.put((samples, sr))  # Blocking put
                 state.chunks_generated += 1
             except Exception as e:
                 print(f"\n❌ TTS generation failed for chunk {i+1}: {e}")
