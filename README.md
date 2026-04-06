@@ -46,7 +46,9 @@ An Obsidian plugin that integrates with the SeferFlow API to create intelligent 
 2. Click **"Browse"** tab
 3. Search for "SeferFlow"
 4. Click **"Install"** and **"Enable"**
-5. **Restart Obsidian**
+5. **Restart Obsidian** to complete installation
+
+### Option 2: Install from GitHub
 
 ### Option 2: Install from GitHub
 
@@ -62,18 +64,23 @@ npm install
 mkdir -p ~/.config/obsidian/community-plugins
 cp -r seferflow-obsidian-plugin ~/.config/obsidian/community-plugins/
 
-# Or on Windows:
-# xcopy C:\Users\YOU\Downloads\seferflow-obsidian-plugin \ CommunityPlugins
+# Enable the plugin:
+# Obsidian Settings → Community Plugins → Browse → Search "SeferFlow" → Enable
+# Then restart Obsidian to finish installing.
 ```
 
 ### Option 3: Manual Installation
 
 ```bash
-# Get the plugin folder from above installation
-cp -r seferflow-obsidian-plugin ~/.config/obsidian/community-plugins/seferflow-obsidian-plugin
+# Copy the plugin folder from the cloned repository to your Obsidian plugins folder
+cp -r seferflow-obsidian-plugin ~/.config/obsidian/community-plugins/
 
-# Enable plugin:
-# Settings → Community Plugins → Browse → Search "SeferFlow" → Enable
+# Or if you installed from a different location, adjust the source path:
+cp -r /path/to/seferflow-obsidian-plugin ~/.config/obsidian/community-plugins/
+
+# Enable the plugin:
+# Obsidian Settings → Community Plugins → Browse → Search "SeferFlow" → Enable
+# Restart Obsidian to complete installation.
 ```
 
 ### 🛠️ Configure the Plugin
