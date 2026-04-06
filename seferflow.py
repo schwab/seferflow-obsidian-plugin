@@ -638,30 +638,78 @@ def _build_display(state: PlaybackState, chapter_name: str, voice_short: str, sp
     return Panel(content, title=status_text, expand=False)
 
 
-def _render_status_line(state: PlaybackState, chapter_name: str, voice_short: str, speed: float):
-    """Print a single-line status using \\r for in-place update. Minimal terminal I/O for audio compatibility."""
-    if state.paused:
-        status = "⏸ PAUSED"
-    elif state.chunks_played >= state.total_chunks:
-        status = "✓ DONE"
-    else:
-        status = "▶ PLAYING"
+def _render_display(state: PlaybackState, chapter_name: str, voice_short: str, speed: float,
+                    current_offset: int, total_samples: int, sample_rate: int):
+    """Render a multi-line formatted display. Called once per second to minimize terminal I/O."""
+    WIDTH = 70
 
+    if state.paused:
+        status_icon = "⏸ PAUSED"
+    elif state.chunks_played >= state.total_chunks:
+        status_icon = "✓ DONE"
+    else:
+        status_icon = "▶ PLAYING"
+
+    # Calculate timings
     elapsed = state.elapsed_before_pause + (time.time() - state.play_start_time) if state.play_start_time > 0 else state.elapsed_before_pause
     pct = int(100 * state.chunks_played / max(state.total_chunks, 1))
     buffered = state.chunks_generated - state.chunks_played
 
-    # Single line, fits in 80 cols
-    line = (f"\r{status}  {state.chunks_played}/{state.total_chunks} [{pct:3d}%]  "
-            f"{fmt_time(elapsed)} {speed}x  {voice_short}  "
-            f"Buffer: {buffered}/{state.queue_max}  "
-            f"[Space] Pause  [←→] Seek  [q] Quit")
+    # Estimate total time from chunk durations
+    total_estimated = sum(state.chunk_durations) if state.chunk_durations else 0
+    if state.chunks_played < len(state.chunk_durations):
+        remaining = sum(state.chunk_durations[state.chunks_played:])
+    else:
+        remaining = 0
+    total_est = elapsed + remaining
 
-    # Pad to 80 chars to clear any previous longer line
-    line = line[:100]  # Truncate if somehow too long
-    line = line.ljust(100)
+    # Build the display
+    lines = []
 
-    sys.stdout.write(line)
+    # Top border
+    lines.append("─" * WIDTH)
+
+    # Status line: icon and chapter on left, speed/voice on right
+    status_section = f"{status_icon}   {chapter_name[:40]}"
+    voice_section = f"{speed:.1f}x  {voice_short}"
+    padding = WIDTH - len(status_section) - len(voice_section)
+    lines.append(status_section + " " * padding + voice_section)
+
+    # Border
+    lines.append("─" * WIDTH)
+    lines.append("")  # blank
+
+    # Section progress
+    section_str = f"Section {state.chunks_played} of {state.total_chunks}"
+    time_str = f"{fmt_time(elapsed)} / ~{fmt_time(total_est)} est."
+    lines.append(f"  {section_str:<35} {time_str:>31}")
+    lines.append("")  # blank
+
+    # Progress bar (████████░░░░)
+    bar_width = WIDTH - 12
+    filled = int(bar_width * state.chunks_played / max(state.total_chunks, 1))
+    bar = "█" * filled + "░" * (bar_width - filled)
+    lines.append(f"  Progress:  {bar}  {pct:3d}%")
+    lines.append("")  # blank
+
+    # Buffer bar
+    buf_width = 15
+    buf_filled = min(buffered, state.queue_max)
+    buf_bar = "█" * buf_filled + "░" * (state.queue_max - buf_filled)
+    gen_status = "↺ generating..." if state.generating else "✓ all generated"
+    lines.append(f"  Buffer:    [{buf_bar}]  {buffered}/{state.queue_max} ready    {gen_status}")
+    lines.append("")  # blank
+
+    # Help text
+    lines.append("  [Space] Pause  [←/→] ±5s  [n/p] Chapter  [q] Quit")
+
+    # Bottom border
+    lines.append("─" * WIDTH)
+
+    # Print all at once with carriage return at top to overwrite
+    sys.stdout.write("\033[H\033[2J")  # Clear screen
+    sys.stdout.write("\n".join(lines))
+    sys.stdout.write("\n")
     sys.stdout.flush()
 
 
@@ -750,9 +798,8 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
                 if current < len(samples):
                     sd.play(samples[current:], sample_rate, latency='low')
 
-        # Polling loop — NO Rich/Live here. Rich's ANSI rendering causes GIL contention
-        # that interrupts the audio stream. Use a minimal \r status line instead,
-        # updated at most once per second.
+        # Polling loop — NO Rich/Live here. Use simple print() with ANSI clear,
+        # updated once per second to minimize terminal I/O and GIL contention.
         last_display_update = 0.0
         try:
             while _is_playing() or state.paused:
@@ -760,7 +807,8 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
 
                 now = time.time()
                 if now - last_display_update >= 1.0:
-                    _render_status_line(state, chapter_name, voice_short, speed)
+                    _render_display(state, chapter_name, voice_short, speed,
+                                   _current_offset(), len(samples), sample_rate)
                     last_display_update = now
 
                 time.sleep(0.05)
