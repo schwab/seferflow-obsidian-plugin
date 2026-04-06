@@ -938,9 +938,17 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
             try:
                 cmd = controls.cmd_queue.get_nowait()
                 if cmd == 'seek_forward':
-                    _restart_from(_current_offset() + SEEK_FORWARD_SAMPLES)
+                    current = _current_offset()
+                    target = current + SEEK_FORWARD_SAMPLES
+                    target = min(target, len(samples) - 1)  # Don't seek past end
+                    if target > current:  # Only seek if moving forward
+                        _restart_from(target)
                 elif cmd == 'seek_backward':
-                    _restart_from(_current_offset() - SEEK_BACKWARD_SAMPLES)
+                    current = _current_offset()
+                    target = current - SEEK_BACKWARD_SAMPLES
+                    target = max(0, target)  # Don't seek before start
+                    if target < current:  # Only seek if moving backward
+                        _restart_from(target)
                 elif cmd in ('next_chapter', 'prev_chapter', 'quit'):
                     sd.stop()
                     raise ChapterChangeRequest(cmd)
