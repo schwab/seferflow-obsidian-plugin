@@ -903,6 +903,8 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
         """Stop playback and restart from a new sample offset."""
         nonlocal sample_offset
         sample_offset = max(0, min(len(samples) - 1, offset))
+        # Update elapsed_before_pause so the timer shows the correct position
+        state.elapsed_before_pause = sample_offset / sample_rate
         sd.stop()
         state.play_start_time = time.time()
         state.paused = False
