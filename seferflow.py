@@ -801,7 +801,7 @@ def _build_display(state: PlaybackState, chapter_name: str, voice_short: str, sp
 
 
 def _render_display(state: PlaybackState, chapter_name: str, voice_short: str, speed: float,
-                    current_offset: int, total_samples: int, sample_rate: int):
+                    current_offset: int, total_samples: int, sample_rate: int, chunk_text: str = ""):
     """Render a multi-line formatted display. Called once per second to minimize terminal I/O."""
     WIDTH = 70
 
@@ -873,6 +873,34 @@ def _render_display(state: PlaybackState, chapter_name: str, voice_short: str, s
     lines.append(f"  📦 Buffer:    [{buf_bar}]  {buffered}/{state.queue_max}  {gen_status}")
     lines.append("")  # blank
 
+    # Text display box (captions) - show current chunk being read
+    if chunk_text:
+        lines.append("  📝 Current Text:")
+        lines.append("  " + "┌" + "─" * (WIDTH - 4) + "┐")
+        # Wrap text to fit in box
+        text_width = WIDTH - 6
+        text_lines = []
+        words = chunk_text.split()
+        current_line = ""
+        for word in words:
+            if len(current_line) + len(word) + 1 <= text_width:
+                current_line += word + " "
+            else:
+                if current_line:
+                    text_lines.append(current_line.rstrip())
+                current_line = word + " "
+        if current_line:
+            text_lines.append(current_line.rstrip())
+
+        # Show first 3 lines of text
+        for i, text_line in enumerate(text_lines[:3]):
+            lines.append(f"  │ {text_line:<{text_width}} │")
+        # Fill remaining lines if less than 3
+        for i in range(len(text_lines[:3]), 3):
+            lines.append(f"  │ {'':<{text_width}} │")
+        lines.append("  " + "└" + "─" * (WIDTH - 4) + "┘")
+        lines.append("")  # blank
+
     # Help text with emojis
     lines.append("  ⌨️  Controls:  [Space] ⏯  [← →] Skip ±5s  [n/p] Chapters  [q] Quit")
 
@@ -888,7 +916,7 @@ def _render_display(state: PlaybackState, chapter_name: str, voice_short: str, s
 
 def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: PlaybackState,
                             chapter_name: str, voice_short: str, speed: float,
-                            controls: PlayerControls):
+                            controls: PlayerControls, chunk_text: str = ""):
     """Play audio while displaying live buffer/progress updates with playback controls.
 
     Implements pause/resume, seek ±5s, and chapter navigation. Uses Rich Live display
@@ -896,6 +924,9 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
 
     With proper sentence reconstruction, GIL contention is minimal, so we can safely
     display updates at low frequency (4 Hz) without audio stuttering.
+
+    Args:
+        chunk_text: The text content of the current chunk for display (captions)
     """
     samples = normalize_audio(samples)
     sample_offset = 0
@@ -1001,7 +1032,7 @@ def play_audio_with_display(samples: np.ndarray, sample_rate: int, state: Playba
                 now = time.time()
                 if now - last_display_update >= 1.0:
                     _render_display(state, chapter_name, voice_short, speed,
-                                   _current_offset(), len(samples), sample_rate)
+                                   _current_offset(), len(samples), sample_rate, chunk_text)
                     last_display_update = now
 
                 time.sleep(0.05)
@@ -1081,6 +1112,22 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
     # Guard: if start_chunk is beyond end, reset to 0
     if start_chunk >= total_chunks:
         start_chunk = 0
+
+    # Save sentences to debug file for review
+    debug_file = "/tmp/seferflow_sentences_debug.txt"
+    try:
+        with open(debug_file, "w") as f:
+            f.write(f"📖 Chapter: {chapter_name}\n")
+            f.write(f"🔊 Voice: {voice} | Speed: {speed}x\n")
+            f.write(f"📊 Total Sections: {total_chunks}\n")
+            f.write("=" * 80 + "\n\n")
+            for i, chunk in enumerate(chunks, 1):
+                f.write(f"[SECTION {i}]\n")
+                f.write(chunk)
+                f.write("\n\n" + "─" * 80 + "\n\n")
+        print(f"💾 Sentences saved to {debug_file}")
+    except Exception as e:
+        print(f"⚠ Could not save sentences: {e}")
 
     # Create shared state
     # queue_max must match the actual audio_queue maxsize for accurate buffer display
@@ -1176,9 +1223,11 @@ def stream_and_play(text: str, voice: str, speed: float, chapter_name: str,
 
             try:
                 # Play this single chunk directly (no concatenation)
+                # Pass the chunk text for display/captions
+                current_chunk_text = chunks[state.chunks_played - 1] if state.chunks_played - 1 < len(chunks) else ""
                 play_audio_with_display(samples, sr, state,
                                        chapter_name, voice.split('-')[1][:4], speed,
-                                       controls)
+                                       controls, chunk_text=current_chunk_text)
             except ChapterChangeRequest as e:
                 chapter_result = e.direction
                 break
