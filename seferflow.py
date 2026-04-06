@@ -220,6 +220,50 @@ def file_progress_status(pdf_path: str) -> str:
     return "partial"
 
 
+def directory_progress_status(dir_path: str) -> str:
+    """Return "none" | "partial" | "complete" based on all PDF files in directory tree.
+
+    Rolls up status from files/subdirs:
+    - "partial" shows if any content is in progress or mixed states exist
+    - "complete" shows if all touched content is complete
+    - "none" shows if nothing has been touched
+    """
+    try:
+        all_items = os.listdir(dir_path)
+    except (PermissionError, FileNotFoundError):
+        return "none"
+
+    has_partial = False   # Any file/subdir is partial (in progress)
+    has_complete = False  # Any file/subdir is complete
+
+    for item in all_items:
+        full_path = os.path.join(dir_path, item)
+
+        if os.path.isdir(full_path) and not item.startswith('.'):
+            # Recursively check subdirectories
+            subdir_status = directory_progress_status(full_path)
+            if subdir_status == "partial":
+                has_partial = True
+            elif subdir_status == "complete":
+                has_complete = True
+        elif item.lower().endswith('.pdf'):
+            # Check PDF status
+            pdf_status = file_progress_status(full_path)
+            if pdf_status == "partial":
+                has_partial = True
+            elif pdf_status == "complete":
+                has_complete = True
+
+    # Return based on what we found
+    # Partial takes priority: indicates active reading or mixed states
+    if has_partial:
+        return "partial"
+    elif has_complete:
+        return "complete"
+    else:
+        return "none"
+
+
 def clear_screen():
     """Clear terminal."""
     os.system('clear' if os.name == 'posix' else 'cls')
@@ -291,21 +335,24 @@ def browse_books(start_dir: str = "/home/mcstar/Nextcloud/Vault/books") -> Optio
         page_size = max(5, terminal_lines - 10)
         page_entries, total_pages, page = paginate(entries, page, page_size)
 
-        # Show entries with progress markers for PDFs
+        # Show entries with progress markers for both PDFs and directories
         for i, (display_name, full_path, item_type) in enumerate(page_entries):
             abs_num = page * page_size + i + 1
             if item_type == 'pdf':
                 status = file_progress_status(full_path)
-                # Use colors and emojis for markers
-                if status == 'complete':
-                    marker = "✅"
-                elif status == 'partial':
-                    marker = YELLOW + "~" + RESET
-                else:
-                    marker = " "
-                print(f"  {abs_num:2d}. {marker} {display_name}")
             else:
-                print(f"  {abs_num:2d}.   {display_name}")
+                # Directory: check contents recursively
+                status = directory_progress_status(full_path)
+
+            # Use colors and emojis for markers
+            if status == 'complete':
+                marker = "✅"
+            elif status == 'partial':
+                marker = YELLOW + "~" + RESET
+            else:
+                marker = " "
+
+            print(f"  {abs_num:2d}. {marker} {display_name}")
 
         # Navigation footer
         footer = "[b] Back"
